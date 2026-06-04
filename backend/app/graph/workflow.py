@@ -93,7 +93,7 @@ class AdaptationWorkflow:
     def _extract_story_facts(self, state: WorkflowState) -> WorkflowState:
         self._start_stage(state, "extract_story_facts")
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
-        if self.settings.use_mock_llm:
+        if self.llm.mock:
             reader_output = self._mock_reader_output(chapters)
         else:
             reader_output = self._remote_reader_output(chapters)
@@ -104,7 +104,7 @@ class AdaptationWorkflow:
     def _plan_scenes(self, state: WorkflowState) -> WorkflowState:
         self._start_stage(state, "plan_scenes")
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
-        if self.settings.use_mock_llm:
+        if self.llm.mock:
             planner_output = self._mock_planner_output(chapters)
         else:
             planner_output = self._remote_planner_output(state["reader_output"], chapters)
@@ -115,7 +115,7 @@ class AdaptationWorkflow:
     def _generate_script_json(self, state: WorkflowState) -> WorkflowState:
         self._start_stage(state, "generate_script_json")
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
-        if self.settings.use_mock_llm:
+        if self.llm.mock:
             payload = self._mock_script(chapters, state["planner_output"])
         else:
             payload = self._remote_script(state["reader_output"], state["planner_output"])

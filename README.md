@@ -105,7 +105,7 @@ npx playwright test
 Backend environment variables:
 
 - `USE_MOCK_LLM`: defaults to `true`; keeps the full workflow demoable without an API key.
-- `OPENAI_API_KEY`: optional, used only when `USE_MOCK_LLM=false`.
+- `OPENAI_API_KEY`: optional, used only when `USE_MOCK_LLM=false`; if no key is provided, the backend keeps using mock mode for demo safety.
 - `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL.
 - `OPENAI_MODEL`: optional, defaults to `gpt-4o-mini`.
 - `RUNS_DIR`: optional, defaults to `runs`.
