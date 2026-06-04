@@ -76,9 +76,23 @@ export default function Home() {
     if (!run) {
       return [];
     }
-    return ["script.yaml", "script.json", "schema.json", "schema.md", "adaptation_report.md"].filter(
-      (artifact) => run.artifacts.includes(artifact),
+    const preferredOrder = [
+      "chapters.json",
+      "reader_output.json",
+      "planner_output.json",
+      "script.json",
+      "script.yaml",
+      "schema.json",
+      "schema.md",
+      "adaptation_report.md",
+      "report.json",
+      "input.txt",
+    ];
+    const ordered = preferredOrder.filter((artifact) => run.artifacts.includes(artifact));
+    const rest = run.artifacts.filter(
+      (artifact) => artifact !== "manifest.json" && !ordered.includes(artifact),
     );
+    return [...ordered, ...rest];
   }, [run]);
 
   async function handleCreateRun() {

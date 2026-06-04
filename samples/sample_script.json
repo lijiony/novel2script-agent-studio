@@ -1,0 +1,144 @@
+{
+  "metadata": {
+    "title": "雨巷里的来信",
+    "source_chapter_count": 3,
+    "language": "zh-CN",
+    "genre": "mystery drama",
+    "logline": "A young archivist follows hidden letters through an abandoned theater to uncover why her father vanished."
+  },
+  "characters": [
+    {
+      "id": "char_linxia",
+      "name": "林夏",
+      "role": "protagonist",
+      "description": "A careful young archivist who decides to continue her father's unfinished investigation.",
+      "first_appearance_chapter": 1
+    },
+    {
+      "id": "char_zhouyan",
+      "name": "周砚",
+      "role": "mentor",
+      "description": "A former stage manager who reveals the old theater's hidden secret.",
+      "first_appearance_chapter": 2
+    }
+  ],
+  "locations": [
+    {
+      "id": "loc_archive",
+      "name": "城南档案馆",
+      "description": "An old archive near a rain-soaked alley."
+    },
+    {
+      "id": "loc_theater",
+      "name": "旧剧院",
+      "description": "A closed theater where one stage lamp still burns."
+    }
+  ],
+  "props": [
+    {
+      "id": "prop_letter",
+      "name": "没有编号的信",
+      "description": "A mysterious letter written in the protagonist's father's hand."
+    },
+    {
+      "id": "prop_script",
+      "name": "旧剧本",
+      "description": "A theater script whose third act hides an address."
+    }
+  ],
+  "scenes": [
+    {
+      "id": "sc_001",
+      "title": "第一幕 雨巷里的信",
+      "source_chapters": [
+        1
+      ],
+      "location_id": "loc_archive",
+      "time_of_day": "night",
+      "characters": [
+        "char_linxia"
+      ],
+      "purpose": "Turn chapter prose into a playable dramatic beat.",
+      "actions": [
+        {
+          "text": "林夏进入场景，线索推动她继续追查。来源章节：1。",
+          "beat": "investigation"
+        }
+      ],
+      "dialogues": [
+        {
+          "speaker_id": "char_linxia",
+          "line": "这条线索不是偶然留下的。",
+          "emotion": "determined"
+        }
+      ],
+      "adaptation_notes": [
+        "Compress prose exposition into visible action and concise dialogue."
+      ]
+    },
+    {
+      "id": "sc_002",
+      "title": "第二幕 旧剧院的灯",
+      "source_chapters": [
+        2
+      ],
+      "location_id": "loc_theater",
+      "time_of_day": "night",
+      "characters": [
+        "char_linxia",
+        "char_zhouyan"
+      ],
+      "purpose": "Turn chapter prose into a playable dramatic beat.",
+      "actions": [
+        {
+          "text": "林夏进入场景，线索推动她继续追查。来源章节：2。",
+          "beat": "investigation"
+        }
+      ],
+      "dialogues": [
+        {
+          "speaker_id": "char_linxia",
+          "line": "这条线索不是偶然留下的。",
+          "emotion": "determined"
+        }
+      ],
+      "adaptation_notes": [
+        "Compress prose exposition into visible action and concise dialogue."
+      ]
+    },
+    {
+      "id": "sc_003",
+      "title": "第三幕 第三幕台词",
+      "source_chapters": [
+        3
+      ],
+      "location_id": "loc_theater",
+      "time_of_day": "night",
+      "characters": [
+        "char_linxia",
+        "char_zhouyan"
+      ],
+      "purpose": "Turn chapter prose into a playable dramatic beat.",
+      "actions": [
+        {
+          "text": "林夏进入场景，线索推动她继续追查。来源章节：3。",
+          "beat": "investigation"
+        }
+      ],
+      "dialogues": [
+        {
+          "speaker_id": "char_linxia",
+          "line": "这条线索不是偶然留下的。",
+          "emotion": "determined"
+        }
+      ],
+      "adaptation_notes": [
+        "Compress prose exposition into visible action and concise dialogue."
+      ]
+    }
+  ],
+  "adaptation_notes": [
+    "Keep the mystery clue chain visible from chapter to chapter.",
+    "Use scene purposes to make the YAML draft easy to continue polishing."
+  ]
+}
