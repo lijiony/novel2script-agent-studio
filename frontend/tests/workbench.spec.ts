@@ -12,5 +12,6 @@ test("converts sample novel into editable YAML", async ({ page }) => {
 
   await page.getByRole("button", { name: "重新校验 YAML" }).click();
   await expect(page.getByText("校验通过")).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载当前 YAML" })).toBeEnabled();
   await expect(page.getByText("下载 script.yaml")).toBeVisible();
 });
