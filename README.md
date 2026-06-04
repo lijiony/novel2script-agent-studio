@@ -120,7 +120,13 @@ Submission readiness precheck:
 .\scripts\check-submission-ready.ps1 -AllowMissingDemo
 ```
 
-Before final submission, run the strict version after replacing the README demo link:
+After uploading the narrated demo video, update all demo-link placeholders with:
+
+```powershell
+.\scripts\set-demo-link.ps1 -DemoUrl "https://example.com/your-demo-video"
+```
+
+Before final submission, run the strict version:
 
 ```powershell
 .\scripts\check-submission-ready.ps1

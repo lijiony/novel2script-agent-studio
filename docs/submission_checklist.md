@@ -7,6 +7,7 @@
 - [ ] Topic and repository URL were submitted at `hr.qiniu.com` within 24 hours.
 - [ ] Repository is public from `2026-06-08 00:00` China time.
 - [ ] Demo video is public or accessible from `2026-06-08 00:00` China time.
+- [ ] Demo link placeholders were replaced with `.\scripts\set-demo-link.ps1 -DemoUrl "<url>"`.
 
 ## Repository Evidence
 

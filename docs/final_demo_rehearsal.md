@@ -45,7 +45,12 @@ If time allows, briefly remove one chapter from the input and show that the back
 ## After Recording
 
 - Upload the narrated video to a public-accessible platform.
-- Replace the README top `TODO` demo link with the real video URL.
+- Replace demo-link placeholders with:
+
+```powershell
+.\scripts\set-demo-link.ps1 -DemoUrl "https://example.com/your-demo-video"
+```
+
 - Run:
 
 ```powershell
