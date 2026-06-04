@@ -1,5 +1,5 @@
 from app.core.config import Settings
-from app.domain.schemas import RunStatus
+from app.domain.schemas import PlannerOutput, ReaderOutput, RunStatus
 from app.graph.workflow import AdaptationWorkflow
 from app.services.run_store import RunStore
 
@@ -23,6 +23,8 @@ def test_mock_workflow_generates_artifacts(tmp_path):
 
     final_manifest = store.read_manifest(manifest.run_id)
     assert final_manifest.status == RunStatus.succeeded
+    ReaderOutput.model_validate(store.read_json(manifest.run_id, "reader_output.json"))
+    PlannerOutput.model_validate(store.read_json(manifest.run_id, "planner_output.json"))
     assert "script.json" in final_manifest.artifacts
     assert "script.yaml" in final_manifest.artifacts
     assert "adaptation_report.md" in final_manifest.artifacts

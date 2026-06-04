@@ -83,12 +83,20 @@ class StoryFact(StrictBaseModel):
     source_chapter: int = Field(..., ge=1)
 
 
+class ReaderOutput(StrictBaseModel):
+    facts: list[StoryFact] = Field(..., min_length=1)
+
+
 class ScenePlan(StrictBaseModel):
     id: str = Field(..., pattern=r"^sc_[0-9]{3}$")
     title: str
     source_chapters: list[int]
     dramatic_purpose: str
     key_events: list[str] = Field(default_factory=list)
+
+
+class PlannerOutput(StrictBaseModel):
+    scenes: list[ScenePlan] = Field(..., min_length=1)
 
 
 class IssueSeverity(str, Enum):

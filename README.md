@@ -153,6 +153,7 @@ validate_input
 ```
 
 The workflow is fixed by design. Each stage writes traceable artifacts into `runs/{run_id}` so the final YAML can be explained and debugged.
+Reader and planner intermediate outputs are also validated with Pydantic models before they are written to disk.
 
 ## Original Work
 
