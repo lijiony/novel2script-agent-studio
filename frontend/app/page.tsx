@@ -72,14 +72,16 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [run]);
 
-  const artifactLinks = useMemo(() => {
+  const artifactGroups = useMemo(() => {
     if (!run) {
       return [];
     }
-    const preferredOrder = [
+    const workflowArtifacts = [
       "chapters.json",
       "reader_output.json",
       "planner_output.json",
+    ].filter((artifact) => run.artifacts.includes(artifact));
+    const deliverableArtifacts = [
       "script.json",
       "script.yaml",
       "schema.json",
@@ -87,12 +89,16 @@ export default function Home() {
       "adaptation_report.md",
       "report.json",
       "input.txt",
-    ];
-    const ordered = preferredOrder.filter((artifact) => run.artifacts.includes(artifact));
+    ].filter((artifact) => run.artifacts.includes(artifact));
+    const grouped = [...workflowArtifacts, ...deliverableArtifacts, "manifest.json"];
     const rest = run.artifacts.filter(
-      (artifact) => artifact !== "manifest.json" && !ordered.includes(artifact),
+      (artifact) => !grouped.includes(artifact),
     );
-    return [...ordered, ...rest];
+    return [
+      { title: "流程中间产物", items: workflowArtifacts },
+      { title: "最终交付产物", items: deliverableArtifacts },
+      { title: "其他产物", items: rest },
+    ].filter((group) => group.items.length > 0);
   }, [run]);
 
   async function handleCreateRun() {
@@ -229,10 +235,15 @@ export default function Home() {
                   ))}
                 </div>
                 <div className="download-grid">
-                  {artifactLinks.map((artifact) => (
-                    <a key={artifact} href={artifactUrl(run.run_id, artifact)} target="_blank">
-                      下载 {artifact}
-                    </a>
+                  {artifactGroups.map((group) => (
+                    <div className="download-group" key={group.title}>
+                      <h3>{group.title}</h3>
+                      {group.items.map((artifact) => (
+                        <a key={artifact} href={artifactUrl(run.run_id, artifact)} target="_blank">
+                          下载 {artifact}
+                        </a>
+                      ))}
+                    </div>
                   ))}
                 </div>
               </>

@@ -194,8 +194,19 @@ a {
 
 .download-grid {
   display: grid;
-  gap: 8px;
+  gap: 12px;
   margin-top: 12px;
+}
+
+.download-group {
+  display: grid;
+  gap: 8px;
+}
+
+.download-group h3 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
 }
 
 .download-grid a {
