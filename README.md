@@ -39,6 +39,14 @@ The system intentionally uses a fixed workflow instead of a free-form autonomous
 
 Clone the repository, then run backend and frontend in two terminals.
 
+For a stable local demo on Windows, run:
+
+```powershell
+.\scripts\start-demo.ps1
+```
+
+Then open `http://127.0.0.1:3000`.
+
 ### Backend
 
 ```powershell
@@ -61,7 +69,7 @@ http://127.0.0.1:8000/health
 ```powershell
 cd frontend
 npm install
-npm run dev
+npm run dev:local
 ```
 
 Open `http://localhost:3000`.
@@ -77,6 +85,12 @@ Open `http://localhost:3000`.
 | `GET` | `/api/schema/script` | Return the generated JSON Schema |
 
 ## Tests
+
+Run all local checks on Windows:
+
+```powershell
+.\scripts\check.ps1
+```
 
 Backend:
 
