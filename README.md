@@ -187,4 +187,5 @@ See also:
 
 - `docs/schema.md`
 - `docs/demo_script.md`
+- `docs/final_demo_rehearsal.md`
 - `docs/submission_checklist.md`
