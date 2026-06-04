@@ -31,6 +31,7 @@
 
 - [ ] Local demo starts with `.\scripts\start-demo.ps1`.
 - [ ] Full local checks pass with `.\scripts\check.ps1`.
+- [ ] Strict submission readiness passes with `.\scripts\check-submission-ready.ps1`.
 - [ ] Backend tests pass.
 - [ ] Frontend build passes.
 - [ ] Playwright smoke test passes.

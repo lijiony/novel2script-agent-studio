@@ -114,6 +114,18 @@ npx playwright install chromium
 npx playwright test
 ```
 
+Submission readiness precheck:
+
+```powershell
+.\scripts\check-submission-ready.ps1 -AllowMissingDemo
+```
+
+Before final submission, run the strict version after replacing the README demo link:
+
+```powershell
+.\scripts\check-submission-ready.ps1
+```
+
 ## Environment
 
 Backend environment variables:
