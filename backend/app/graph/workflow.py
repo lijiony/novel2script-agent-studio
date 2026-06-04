@@ -5,6 +5,8 @@ from app.core.config import Settings
 from app.domain.chapter_parser import ChapterParseError, parse_chapters
 from app.domain.schemas import (
     Chapter,
+    PlannerOutput,
+    ReaderOutput,
     RunStatus,
     ScriptJson,
     StoryFact,
@@ -93,10 +95,11 @@ class AdaptationWorkflow:
     def _extract_story_facts(self, state: WorkflowState) -> WorkflowState:
         self._start_stage(state, "extract_story_facts")
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
-        if self.settings.use_mock_llm:
-            reader_output = self._mock_reader_output(chapters)
+        if self.llm.mock:
+            raw_reader_output = self._mock_reader_output(chapters)
         else:
-            reader_output = self._remote_reader_output(chapters)
+            raw_reader_output = self._remote_reader_output(chapters)
+        reader_output = ReaderOutput.model_validate(raw_reader_output).model_dump(mode="json")
         self.store.write_json(state["run_id"], "reader_output.json", reader_output)
         self._finish_stage(state, "extract_story_facts", "Story facts extracted.")
         return {**state, "reader_output": reader_output}
@@ -104,10 +107,11 @@ class AdaptationWorkflow:
     def _plan_scenes(self, state: WorkflowState) -> WorkflowState:
         self._start_stage(state, "plan_scenes")
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
-        if self.settings.use_mock_llm:
-            planner_output = self._mock_planner_output(chapters)
+        if self.llm.mock:
+            raw_planner_output = self._mock_planner_output(chapters)
         else:
-            planner_output = self._remote_planner_output(state["reader_output"], chapters)
+            raw_planner_output = self._remote_planner_output(state["reader_output"], chapters)
+        planner_output = PlannerOutput.model_validate(raw_planner_output).model_dump(mode="json")
         self.store.write_json(state["run_id"], "planner_output.json", planner_output)
         self._finish_stage(state, "plan_scenes", "Scene plan created.")
         return {**state, "planner_output": planner_output}
@@ -115,7 +119,7 @@ class AdaptationWorkflow:
     def _generate_script_json(self, state: WorkflowState) -> WorkflowState:
         self._start_stage(state, "generate_script_json")
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
-        if self.settings.use_mock_llm:
+        if self.llm.mock:
             payload = self._mock_script(chapters, state["planner_output"])
         else:
             payload = self._remote_script(state["reader_output"], state["planner_output"])
@@ -316,16 +320,20 @@ class AdaptationWorkflow:
 
     def _remote_reader_output(self, chapters: list[Chapter]) -> dict[str, Any]:
         return self.llm.generate_json(
-            "Extract characters, locations, events, and props from the novel chapters as JSON.",
-            {"chapters": [chapter.model_dump() for chapter in chapters]},
+            "Extract characters, locations, events, and props. Return JSON only matching the provided ReaderOutput schema.",
+            {
+                "schema": ReaderOutput.model_json_schema(),
+                "chapters": [chapter.model_dump() for chapter in chapters],
+            },
         )
 
     def _remote_planner_output(
         self, reader_output: dict[str, Any], chapters: list[Chapter]
     ) -> dict[str, Any]:
         return self.llm.generate_json(
-            "Create a concise screenplay scene plan. Return JSON only.",
+            "Create a concise screenplay scene plan. Return JSON only matching the provided PlannerOutput schema.",
             {
+                "schema": PlannerOutput.model_json_schema(),
                 "reader_output": reader_output,
                 "chapters": [chapter.model_dump() for chapter in chapters],
             },

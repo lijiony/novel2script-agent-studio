@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack",
+    "dev:local": "next dev --webpack --hostname 127.0.0.1 --port 3000",
+    "dev:backend": "node scripts/start-backend.mjs",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "next lint",

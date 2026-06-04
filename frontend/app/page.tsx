@@ -113,6 +113,16 @@ export default function Home() {
     }
   }
 
+  function handleDownloadEditedYaml() {
+    const blob = new Blob([yamlText], { type: "application/x-yaml;charset=utf-8" });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "script.edited.yaml";
+    anchor.click();
+    window.URL.revokeObjectURL(url);
+  }
+
   function handleFile(event: ChangeEvent<HTMLInputElement>) {
     const nextFile = event.target.files?.[0] ?? null;
     setFile(nextFile);
@@ -170,6 +180,9 @@ export default function Home() {
                 <div className="actions">
                   <button type="button" disabled={!canValidate || busy} onClick={handleValidateYaml}>
                     重新校验 YAML
+                  </button>
+                  <button type="button" disabled={!yamlText.trim()} onClick={handleDownloadEditedYaml}>
+                    下载当前 YAML
                   </button>
                 </div>
               </>
