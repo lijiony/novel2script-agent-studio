@@ -25,7 +25,7 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      command: "npm run dev -- --hostname 127.0.0.1 --port 3000",
+      command: "npm run dev:local",
       url: "http://127.0.0.1:3000",
       reuseExistingServer: true,
       timeout: 60_000,
