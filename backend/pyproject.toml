@@ -1,0 +1,27 @@
+[project]
+name = "novel2script-backend"
+version = "0.1.0"
+description = "FastAPI backend for Novel2Script Agent Studio"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.7.0",
+  "pydantic-settings>=2.3.0",
+  "python-multipart>=0.0.9",
+  "langgraph>=0.2.0",
+  "jsonschema>=4.22.0",
+  "ruamel.yaml>=0.18.6",
+  "openai>=1.40.0",
+  "typing-extensions>=4.12.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "httpx>=0.27.0"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
