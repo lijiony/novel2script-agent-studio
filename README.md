@@ -37,6 +37,8 @@ The system intentionally uses a fixed workflow instead of a free-form autonomous
 
 ## Quick Start
 
+Clone the repository, then run backend and frontend in two terminals.
+
 ### Backend
 
 ```powershell
@@ -48,6 +50,12 @@ $env:USE_MOCK_LLM="true"
 uvicorn app.main:app --reload --port 8000
 ```
 
+Health check:
+
+```text
+http://127.0.0.1:8000/health
+```
+
 ### Frontend
 
 ```powershell
@@ -57,6 +65,40 @@ npm run dev
 ```
 
 Open `http://localhost:3000`.
+
+## API
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/runs` | Create a run from pasted text or `.txt` upload |
+| `GET` | `/api/runs/{run_id}` | Poll run status, current stage, and artifacts |
+| `GET` | `/api/runs/{run_id}/artifacts/{name}` | Download a whitelisted artifact |
+| `POST` | `/api/runs/{run_id}/validate-yaml` | Validate edited YAML |
+| `GET` | `/api/schema/script` | Return the generated JSON Schema |
+
+## Tests
+
+Backend:
+
+```powershell
+cd backend
+.venv\Scripts\python -m pytest
+```
+
+Frontend build:
+
+```powershell
+cd frontend
+npm run build
+```
+
+Frontend smoke test:
+
+```powershell
+cd frontend
+npx playwright install chromium
+npx playwright test
+```
 
 ## Environment
 
@@ -81,6 +123,22 @@ GET /api/schema/script
 ```
 
 The human-readable schema document lives at `docs/schema.md` and is also written into each run directory as `schema.md`.
+
+## LangGraph Workflow
+
+```text
+validate_input
+ -> parse_chapters
+ -> extract_story_facts
+ -> plan_scenes
+ -> generate_script_json
+ -> validate_schema
+ -> repair_once_if_needed
+ -> export_yaml
+ -> generate_report
+```
+
+The workflow is fixed by design. Each stage writes traceable artifacts into `runs/{run_id}` so the final YAML can be explained and debugged.
 
 ## Original Work
 
@@ -109,3 +167,9 @@ Third-party libraries are listed in `backend/pyproject.toml` and `frontend/packa
 - All commits must be inside the third-batch work window.
 - Keep small PRs with clear title, feature description, implementation approach, and test method.
 - Add the narrated demo link at the top of this README before final submission.
+
+See also:
+
+- `docs/schema.md`
+- `docs/demo_script.md`
+- `docs/submission_checklist.md`
