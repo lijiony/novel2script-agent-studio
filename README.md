@@ -120,10 +120,10 @@ Submission readiness precheck:
 .\scripts\check-submission-ready.ps1 -AllowMissingDemo
 ```
 
-After uploading the narrated demo video, update all demo-link placeholders with:
+After uploading the narrated video, update the placeholders with:
 
 ```powershell
-.\scripts\set-demo-link.ps1 -DemoUrl "https://example.com/your-demo-video"
+.\scripts\set-demo-link.ps1 -DemoUrl "<your video URL>"
 ```
 
 Before final submission, run the strict version:
