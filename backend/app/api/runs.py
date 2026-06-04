@@ -1,5 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse
 
 from app.core.config import Settings, get_settings
 from app.dependencies import get_run_store
@@ -63,9 +63,11 @@ def get_artifact(run_id: str, artifact: str, store: RunStore = Depends(get_run_s
         raise HTTPException(status_code=404, detail="Run not found.") from exc
     if not path.exists():
         raise HTTPException(status_code=404, detail="Artifact not found.")
-    if artifact.endswith(".md") or artifact.endswith(".yaml") or artifact.endswith(".txt"):
-        return PlainTextResponse(path.read_text(encoding="utf-8"))
-    return FileResponse(path)
+    return FileResponse(
+        path,
+        filename=artifact,
+        media_type=_artifact_media_type(artifact),
+    )
 
 
 @router.post("/runs/{run_id}/validate-yaml", response_model=YamlValidationResponse)
@@ -93,3 +95,15 @@ async def _read_input(text: str | None, file: UploadFile | None) -> str:
     if text is not None and text.strip():
         return text
     raise HTTPException(status_code=400, detail="Provide novel text or a .txt file.")
+
+
+def _artifact_media_type(artifact: str) -> str:
+    if artifact.endswith(".json"):
+        return "application/json"
+    if artifact.endswith(".yaml"):
+        return "application/x-yaml"
+    if artifact.endswith(".md"):
+        return "text/markdown"
+    if artifact.endswith(".txt"):
+        return "text/plain"
+    return "application/octet-stream"
