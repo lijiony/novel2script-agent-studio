@@ -18,8 +18,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command:
-        'powershell -NoProfile -Command "cd ../backend; .venv\\\\Scripts\\\\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000"',
+      command: "npm run dev:backend",
       url: "http://127.0.0.1:8000/health",
       reuseExistingServer: true,
       timeout: 30_000,
