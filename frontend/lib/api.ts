@@ -70,6 +70,19 @@ export type AuthorControls = {
   author_notes?: string | null;
 };
 
+export type LlmStatus = {
+  mode: "mock" | "real";
+  use_mock_llm: boolean;
+  api_key_configured: boolean;
+  base_url_configured: boolean;
+  model: string;
+};
+
+export type LlmTestResult = LlmStatus & {
+  success: boolean;
+  message: string;
+};
+
 export async function createRun(text: string, file?: File | null): Promise<RunInfo> {
   const form = new FormData();
   if (file) {
@@ -168,6 +181,24 @@ export async function validateYaml(
   }
   const result = await response.json();
   return result.report;
+}
+
+export async function getLlmStatus(): Promise<LlmStatus> {
+  const response = await fetch(`${API_BASE_URL}/api/llm/status`);
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function testLlmConnection(): Promise<LlmTestResult> {
+  const response = await fetch(`${API_BASE_URL}/api/llm/test`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
 }
 
 async function errorText(response: Response): Promise<string> {

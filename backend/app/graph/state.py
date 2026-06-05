@@ -5,7 +5,9 @@ class WorkflowState(TypedDict, total=False):
     run_id: str
     input_text: str
     chapters: list[dict[str, Any]]
+    chapter_cards: list[dict[str, Any]]
     reader_output: dict[str, Any]
+    story_bible: dict[str, Any]
     planner_output: dict[str, Any]
     adaptation_plan: dict[str, Any]
     author_controls: dict[str, Any]

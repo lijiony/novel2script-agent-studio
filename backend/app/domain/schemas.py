@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictBaseModel(BaseModel):
@@ -138,6 +138,68 @@ class ReaderOutput(StrictBaseModel):
     facts: list[StoryFact] = Field(..., min_length=1)
 
 
+class SourceQuote(StrictBaseModel):
+    quote: str = Field(..., min_length=1)
+    reason: str = Field(..., min_length=1)
+    confidence: Literal["high", "medium", "low"] = "medium"
+
+
+class ChapterCard(StrictBaseModel):
+    chapter_id: str = Field(..., pattern=r"^ch_[0-9]{3}$")
+    chapter_index: int = Field(..., ge=1)
+    title: str = Field(..., min_length=1)
+    char_count: int = Field(..., ge=1)
+    summary: str = Field(..., min_length=1)
+    key_events: list[str] = Field(default_factory=list)
+    characters: list[str] = Field(default_factory=list)
+    locations: list[str] = Field(default_factory=list)
+    conflicts: list[str] = Field(default_factory=list)
+    emotional_beats: list[str] = Field(default_factory=list)
+    clues: list[str] = Field(default_factory=list)
+    adaptation_opportunities: list[str] = Field(default_factory=list)
+    source_quotes: list[SourceQuote] = Field(default_factory=list)
+    continuity_notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def chapter_id_matches_index(self):
+        expected = f"ch_{self.chapter_index:03d}"
+        if self.chapter_id != expected:
+            raise ValueError(f"chapter_id must be {expected} for chapter_index {self.chapter_index}.")
+        return self
+
+
+class StoryBibleChapter(StrictBaseModel):
+    chapter_id: str = Field(..., pattern=r"^ch_[0-9]{3}$")
+    title: str = Field(..., min_length=1)
+    char_count: int = Field(..., ge=1)
+    summary: str = Field(..., min_length=1)
+
+
+class StoryBible(StrictBaseModel):
+    main_plot: str = Field(..., min_length=1)
+    character_arcs: list[str] = Field(default_factory=list)
+    relationship_map: list[str] = Field(default_factory=list)
+    timeline: list[str] = Field(default_factory=list)
+    major_clues: list[str] = Field(default_factory=list)
+    adaptation_risks: list[str] = Field(default_factory=list)
+    chapter_index: list[StoryBibleChapter] = Field(..., min_length=1)
+    recommended_generation_scope: list[int] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def scope_is_valid(self):
+        valid_indexes = {
+            int(chapter.chapter_id.removeprefix("ch_")) for chapter in self.chapter_index
+        }
+        if len(self.recommended_generation_scope) != len(set(self.recommended_generation_scope)):
+            raise ValueError("recommended_generation_scope must not contain duplicates.")
+        unknown = [
+            item for item in self.recommended_generation_scope if item not in valid_indexes
+        ]
+        if unknown:
+            raise ValueError(f"recommended_generation_scope contains unknown chapters: {unknown}.")
+        return self
+
+
 class ScenePlan(StrictBaseModel):
     id: str = Field(..., pattern=r"^sc_[0-9]{3}$")
     title: str
@@ -166,6 +228,7 @@ class AdaptationPlan(StrictBaseModel):
     recommended_format_type: ScriptFormat = ScriptFormat.short_drama
     recommended_style_focus: StyleFocus = StyleFocus.psychological
     recommended_adaptation_scale: AdaptationScale = AdaptationScale.balanced
+    recommended_generation_scope: list[int] = Field(default_factory=list)
     rationale: list[str] = Field(default_factory=list)
     character_notes: list[str] = Field(default_factory=list)
     plot_threads: list[str] = Field(default_factory=list)
@@ -248,6 +311,19 @@ class YamlValidationResponse(StrictBaseModel):
 
 class GenerateRunRequest(StrictBaseModel):
     controls: AuthorControls = Field(default_factory=AuthorControls)
+
+
+class LlmStatusResponse(StrictBaseModel):
+    mode: Literal["mock", "real"]
+    use_mock_llm: bool
+    api_key_configured: bool
+    base_url_configured: bool
+    model: str
+
+
+class LlmTestResponse(LlmStatusResponse):
+    success: bool
+    message: str
 
 
 def now_iso() -> str:

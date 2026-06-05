@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.llm import router as llm_router
 from app.api.runs import router as runs_router
 from app.api.schema import router as schema_router
 
@@ -19,6 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(llm_router)
 app.include_router(runs_router)
 app.include_router(schema_router)
 

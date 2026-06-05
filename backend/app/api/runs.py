@@ -104,7 +104,12 @@ def get_artifact(run_id: str, artifact: str, store: RunStore = Depends(get_run_s
     if artifact not in ALLOWED_ARTIFACTS:
         raise HTTPException(status_code=404, detail="Artifact is not allowed.")
     try:
+        manifest = store.read_manifest(run_id)
+        if artifact not in manifest.artifacts:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
         path = store.artifact_path(run_id, artifact)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=404, detail="Run not found.") from exc
     if not path.exists():

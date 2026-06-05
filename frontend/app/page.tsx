@@ -7,19 +7,55 @@ import { ReportPanel } from "@/components/ReportPanel";
 import {
   API_BASE_URL,
   AuthorControls,
+  LlmStatus,
+  LlmTestResult,
   RunInfo,
   ValidationReport,
   artifactUrl,
   generateRun,
   getArtifact,
+  getLlmStatus,
   getRun,
   getScriptSchema,
   intakeRun,
+  testLlmConnection,
   validateYaml,
 } from "@/lib/api";
 
-type ArtifactPanel = "yaml" | "report" | "downloads" | "details";
+type ArtifactPanel = "chapterCards" | "storyBible" | "yaml" | "report" | "downloads" | "details";
 type ConversationPhase = "idle" | "analyzing" | "planned" | "generating" | "completed" | "failed";
+
+type ChapterCard = {
+  chapter_id: string;
+  chapter_index: number;
+  title: string;
+  char_count: number;
+  summary: string;
+  key_events: string[];
+  characters: string[];
+  locations: string[];
+  conflicts: string[];
+  emotional_beats: string[];
+  clues: string[];
+  adaptation_opportunities: string[];
+  continuity_notes: string[];
+};
+
+type StoryBible = {
+  main_plot: string;
+  character_arcs: string[];
+  relationship_map: string[];
+  timeline: string[];
+  major_clues: string[];
+  adaptation_risks: string[];
+  recommended_generation_scope: number[];
+  chapter_index: Array<{
+    chapter_id: string;
+    title: string;
+    char_count: number;
+    summary: string;
+  }>;
+};
 
 const sampleText = `第一章 雨巷里的信
 
@@ -82,10 +118,16 @@ export default function Home() {
   const [run, setRun] = useState<RunInfo | null>(null);
   const [controls, setControls] = useState<AuthorControls>(defaultControls);
   const [planMarkdown, setPlanMarkdown] = useState("");
+  const [chapterCards, setChapterCards] = useState<ChapterCard[]>([]);
+  const [storyBible, setStoryBible] = useState<StoryBible | null>(null);
+  const [storyBibleMarkdown, setStoryBibleMarkdown] = useState("");
   const [yamlText, setYamlText] = useState("");
   const [reportMarkdown, setReportMarkdown] = useState("");
   const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
   const [schema, setSchema] = useState<Record<string, unknown> | null>(null);
+  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
+  const [llmTestResult, setLlmTestResult] = useState<LlmTestResult | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeArtifactPanel, setActiveArtifactPanel] = useState<ArtifactPanel | null>(null);
   const [generationRequested, setGenerationRequested] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -100,11 +142,13 @@ export default function Home() {
   const plan = useMemo(() => parsePlanMarkdown(planMarkdown), [planMarkdown]);
   const hasArtifacts = Boolean(run?.artifacts.length);
   const completed = phase === "completed";
+  const totalChapterChars = chapterCards.reduce((sum, card) => sum + card.char_count, 0);
 
   useEffect(() => {
     getScriptSchema()
       .then(setSchema)
       .catch(() => setSchema(null));
+    refreshLlmStatus();
   }, []);
 
   useEffect(() => {
@@ -116,7 +160,7 @@ export default function Home() {
         const nextRun = await getRun(run.run_id);
         setRun(nextRun);
         if (nextRun.status === "planned") {
-          await loadPlan(nextRun.run_id);
+          await loadPlanningArtifacts(nextRun.run_id);
           setGenerationRequested(false);
         }
         if (nextRun.status === "succeeded") {
@@ -137,7 +181,10 @@ export default function Home() {
     }
     const workflowArtifacts = [
       "chapters.json",
+      "chapter_cards.json",
       "reader_output.json",
+      "story_bible.json",
+      "story_bible.md",
       "planner_output.json",
       "adaptation_plan.json",
       "adaptation_plan.md",
@@ -165,6 +212,9 @@ export default function Home() {
     setBusy(true);
     setError(null);
     setPlanMarkdown("");
+    setChapterCards([]);
+    setStoryBible(null);
+    setStoryBibleMarkdown("");
     setYamlText("");
     setReportMarkdown("");
     setValidationReport(null);
@@ -174,7 +224,7 @@ export default function Home() {
       const nextRun = await intakeRun(inputText, file);
       setRun(nextRun);
       if (nextRun.status === "planned") {
-        await loadPlan(nextRun.run_id);
+        await loadPlanningArtifacts(nextRun.run_id);
       }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -242,9 +292,17 @@ export default function Home() {
     setFile(nextFile);
   }
 
-  async function loadPlan(runId: string) {
-    const nextPlan = await getArtifactWithRetry(runId, "adaptation_plan.md");
+  async function loadPlanningArtifacts(runId: string) {
+    const [nextPlan, cardsText, bibleText, bibleMarkdown] = await Promise.all([
+      getArtifactWithRetry(runId, "adaptation_plan.md"),
+      getArtifactWithRetry(runId, "chapter_cards.json"),
+      getArtifactWithRetry(runId, "story_bible.json"),
+      getArtifactWithRetry(runId, "story_bible.md"),
+    ]);
     setPlanMarkdown(nextPlan);
+    setChapterCards(JSON.parse(cardsText) as ChapterCard[]);
+    setStoryBible(JSON.parse(bibleText) as StoryBible);
+    setStoryBibleMarkdown(bibleMarkdown);
   }
 
   async function loadFinalArtifacts(runId: string) {
@@ -273,6 +331,29 @@ export default function Home() {
     setControls((current) => ({ ...current, [key]: value }));
   }
 
+  async function refreshLlmStatus() {
+    try {
+      const status = await getLlmStatus();
+      setLlmStatus(status);
+    } catch {
+      setLlmStatus(null);
+    }
+  }
+
+  async function handleTestLlm() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await testLlmConnection();
+      setLlmTestResult(result);
+      setLlmStatus(result);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function listFromText(value: string): string[] {
     return value
       .split(/\r?\n/)
@@ -288,6 +369,9 @@ export default function Home() {
           <span>AI 改编副编剧</span>
         </div>
         <div className="run-pill">{phaseLabel(phase)}</div>
+        <button className="settings-button" type="button" onClick={() => setSettingsOpen(true)}>
+          模型设置
+        </button>
         <nav className="step-nav" aria-label="流程步骤">
           {stepLabels.map((label, index) => (
             <div className={index <= activeStepIndex(phase) ? "step-item active" : "step-item"} key={label}>
@@ -297,6 +381,12 @@ export default function Home() {
           ))}
         </nav>
         <div className="sidebar-actions">
+          <button type="button" disabled={!chapterCards.length} onClick={() => setActiveArtifactPanel("chapterCards")}>
+            章节理解卡
+          </button>
+          <button type="button" disabled={!storyBibleMarkdown} onClick={() => setActiveArtifactPanel("storyBible")}>
+            Story Bible
+          </button>
           <button type="button" disabled={!yamlText} onClick={() => setActiveArtifactPanel("yaml")}>
             打开 YAML
           </button>
@@ -314,6 +404,17 @@ export default function Home() {
           API health
         </a>
       </aside>
+
+      {settingsOpen ? (
+        <SettingsDrawer
+          busy={busy}
+          llmStatus={llmStatus}
+          llmTestResult={llmTestResult}
+          onClose={() => setSettingsOpen(false)}
+          onRefresh={refreshLlmStatus}
+          onTest={handleTestLlm}
+        />
+      ) : null}
 
       <main className="chat-shell">
         <section className="chat-header">
@@ -362,6 +463,11 @@ export default function Home() {
 
           {planMarkdown ? (
             <AssistantMessage title="副编剧建议">
+              <LongNovelOverview
+                chapterCards={chapterCards}
+                storyBible={storyBible}
+                totalChapterChars={totalChapterChars}
+              />
               <PlanCards plan={plan} />
             </AssistantMessage>
           ) : null}
@@ -432,6 +538,7 @@ export default function Home() {
           activePanel={activeArtifactPanel}
           artifactGroups={artifactGroups}
           canValidate={canValidate}
+          chapterCards={chapterCards}
           handleDownloadEditedYaml={handleDownloadEditedYaml}
           handleValidateYaml={handleValidateYaml}
           reportMarkdown={reportMarkdown}
@@ -439,6 +546,8 @@ export default function Home() {
           schema={schema}
           setActivePanel={setActiveArtifactPanel}
           setYamlText={setYamlText}
+          storyBible={storyBible}
+          storyBibleMarkdown={storyBibleMarkdown}
           validationReport={validationReport}
           yamlText={yamlText}
         />
@@ -468,6 +577,113 @@ function UserMessage({ children, title }: { children: ReactNode; title: string }
         {children}
       </div>
     </article>
+  );
+}
+
+function SettingsDrawer({
+  busy,
+  llmStatus,
+  llmTestResult,
+  onClose,
+  onRefresh,
+  onTest,
+}: {
+  busy: boolean;
+  llmStatus: LlmStatus | null;
+  llmTestResult: LlmTestResult | null;
+  onClose: () => void;
+  onRefresh: () => void;
+  onTest: () => void;
+}) {
+  return (
+    <div className="settings-backdrop" role="presentation">
+      <aside className="settings-drawer" aria-label="模型设置">
+        <div className="artifact-header">
+          <div>
+            <span>Settings</span>
+            <strong>模型设置</strong>
+          </div>
+          <button type="button" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+        <div className="settings-body">
+          <div className="notice">
+            API Key 请填入 <strong>backend/.env</strong>，不要粘贴到页面或提交到仓库。
+          </div>
+          <div className="run-detail">
+            <span>模式</span>
+            <strong>{llmStatus?.mode === "real" ? "Real Model" : "Mock Demo"}</strong>
+            <span>模型</span>
+            <strong>{llmStatus?.model ?? "未连接"}</strong>
+            <span>API Key</span>
+            <strong>{llmStatus?.api_key_configured ? "已配置" : "未配置"}</strong>
+            <span>Base URL</span>
+            <strong>{llmStatus?.base_url_configured ? "已配置" : "默认 OpenAI"}</strong>
+          </div>
+          <div className="inline-actions">
+            <button type="button" disabled={busy} onClick={onRefresh}>
+              刷新状态
+            </button>
+            <button type="button" disabled={busy} onClick={onTest}>
+              测试连接
+            </button>
+          </div>
+          {llmTestResult ? (
+            <div className={llmTestResult.success ? "notice success-notice" : "notice warning-notice"}>
+              <strong>{llmTestResult.success ? "连接可用" : "连接不可用"}</strong>
+              <div>{llmTestResult.message}</div>
+            </div>
+          ) : null}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function LongNovelOverview({
+  chapterCards,
+  storyBible,
+  totalChapterChars,
+}: {
+  chapterCards: ChapterCard[];
+  storyBible: StoryBible | null;
+  totalChapterChars: number;
+}) {
+  if (!chapterCards.length || !storyBible) {
+    return <div className="hint-card">章节理解卡和 Story Bible 生成后，会在这里展示长篇承载结果。</div>;
+  }
+  return (
+    <div className="long-novel-overview">
+      <div className="metric-row">
+        <div>
+          <span>章节</span>
+          <strong>{chapterCards.length}</strong>
+        </div>
+        <div>
+          <span>总字数</span>
+          <strong>{totalChapterChars}</strong>
+        </div>
+        <div>
+          <span>建议先生成</span>
+          <strong>第 {storyBible.recommended_generation_scope.join(", ")} 章</strong>
+        </div>
+      </div>
+      <div className="insight-card wide">
+        <span>全书主线</span>
+        <p>{storyBible.main_plot}</p>
+      </div>
+      <div className="chapter-card-list">
+        {chapterCards.slice(0, 5).map((card) => (
+          <div className="chapter-card-item" key={card.chapter_id}>
+            <strong>
+              {card.title} · {card.char_count} 字
+            </strong>
+            <p>{card.summary}</p>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -583,6 +799,7 @@ function ArtifactPanelView({
   activePanel,
   artifactGroups,
   canValidate,
+  chapterCards,
   handleDownloadEditedYaml,
   handleValidateYaml,
   reportMarkdown,
@@ -590,12 +807,15 @@ function ArtifactPanelView({
   schema,
   setActivePanel,
   setYamlText,
+  storyBible,
+  storyBibleMarkdown,
   validationReport,
   yamlText,
 }: {
   activePanel: ArtifactPanel;
   artifactGroups: { title: string; items: string[] }[];
   canValidate: boolean;
+  chapterCards: ChapterCard[];
   handleDownloadEditedYaml: () => void;
   handleValidateYaml: () => void;
   reportMarkdown: string;
@@ -603,6 +823,8 @@ function ArtifactPanelView({
   schema: Record<string, unknown> | null;
   setActivePanel: (panel: ArtifactPanel | null) => void;
   setYamlText: (value: string) => void;
+  storyBible: StoryBible | null;
+  storyBibleMarkdown: string;
   validationReport: ValidationReport | null;
   yamlText: string;
 }) {
@@ -618,10 +840,14 @@ function ArtifactPanelView({
         </button>
       </div>
       <div className="artifact-tabs">
-        {(["yaml", "report", "downloads", "details"] as ArtifactPanel[]).map((panel) => (
+        {(["chapterCards", "storyBible", "yaml", "report", "downloads", "details"] as ArtifactPanel[]).map((panel) => (
           <button
             className={activePanel === panel ? "active" : ""}
-            disabled={panel === "yaml" && !yamlText}
+            disabled={
+              (panel === "chapterCards" && !chapterCards.length)
+              || (panel === "storyBible" && !storyBible)
+              || (panel === "yaml" && !yamlText)
+            }
             key={panel}
             type="button"
             onClick={() => setActivePanel(panel)}
@@ -630,6 +856,40 @@ function ArtifactPanelView({
           </button>
         ))}
       </div>
+      {activePanel === "chapterCards" ? (
+        <div className="artifact-body">
+          {chapterCards.length ? (
+            <div className="chapter-card-list">
+              {chapterCards.map((card) => (
+                <div className="chapter-card-item" key={card.chapter_id}>
+                  <strong>
+                    {card.chapter_id} · {card.title} · {card.char_count} 字
+                  </strong>
+                  <p>{card.summary}</p>
+                  <small>线索：{card.clues.join(" / ") || "暂无"}</small>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="hint-card">分析完成后，这里会显示每章理解卡。</div>
+          )}
+        </div>
+      ) : null}
+      {activePanel === "storyBible" ? (
+        <div className="artifact-body">
+          {storyBible ? (
+            <>
+              <div className="notice">
+                <strong>主线</strong>
+                <div>{storyBible.main_plot}</div>
+              </div>
+              <div className="report">{storyBibleMarkdown}</div>
+            </>
+          ) : (
+            <div className="hint-card">分析完成后，这里会显示 Story Bible。</div>
+          )}
+        </div>
+      ) : null}
       {activePanel === "yaml" ? (
         <div className="artifact-body">
           {yamlText ? (
@@ -828,6 +1088,8 @@ function activeStepIndex(phase: ConversationPhase): number {
 
 function panelTitle(panel: ArtifactPanel): string {
   const labels: Record<ArtifactPanel, string> = {
+    chapterCards: "章节理解卡",
+    storyBible: "Story Bible",
     yaml: "YAML",
     report: "改编报告",
     downloads: "下载产物",

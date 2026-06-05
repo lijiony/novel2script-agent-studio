@@ -146,6 +146,20 @@ select:focus {
   font-size: 12px;
 }
 
+.settings-button {
+  width: 100%;
+  justify-content: flex-start;
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.06);
+  color: #eef2ef;
+}
+
+.settings-button:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
 .step-nav {
   display: grid;
   gap: 7px;
@@ -394,6 +408,70 @@ select:focus {
   margin-top: 6px;
 }
 
+.long-novel-overview {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metric-row div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  padding: 11px;
+}
+
+.metric-row span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.metric-row strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--accent-dark);
+  font-size: 16px;
+}
+
+.chapter-card-list {
+  display: grid;
+  gap: 9px;
+}
+
+.chapter-card-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 11px;
+}
+
+.chapter-card-item strong {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chapter-card-item p {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chapter-card-item small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .control-card {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -521,7 +599,7 @@ select:focus {
 .artifact-tabs {
   padding: 10px 12px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
   border-bottom: 1px solid var(--line);
 }
@@ -542,6 +620,41 @@ select:focus {
   flex: 1;
   overflow: auto;
   padding: 14px;
+}
+
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(23, 27, 29, 0.28);
+}
+
+.settings-drawer {
+  width: min(420px, 100vw);
+  min-height: 100vh;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  box-shadow: -18px 0 38px rgba(31, 39, 35, 0.18);
+}
+
+.settings-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.success-notice {
+  border-color: #b8dec9;
+  background: #eef8f2;
+  color: var(--ok);
+}
+
+.warning-notice {
+  border-color: #f0d28d;
+  background: var(--warm-soft);
+  color: var(--warm);
 }
 
 .editor-wrap {
@@ -751,6 +864,10 @@ select:focus {
   .artifact-tabs,
   .step-nav,
   .sidebar-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-row {
     grid-template-columns: 1fr;
   }
 }

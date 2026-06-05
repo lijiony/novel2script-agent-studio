@@ -2,7 +2,8 @@ param(
     [int]$BackendPort = 8000,
     [int]$FrontendPort = 3000,
     [ValidateSet("production", "dev")]
-    [string]$FrontendMode = "production"
+    [string]$FrontendMode = "production",
+    [switch]$UseRealLlm
 )
 
 $ErrorActionPreference = "Stop"
@@ -80,12 +81,13 @@ function Build-StandaloneFrontend {
 }
 
 if (-not (Test-Port $BackendPort)) {
+    $MockFlag = if ($UseRealLlm) { "false" } else { "true" }
     Start-Process -FilePath powershell -ArgumentList @(
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        "`$env:USE_MOCK_LLM='true'; cd '$BackendDir'; .venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port $BackendPort"
+        "`$env:USE_MOCK_LLM='$MockFlag'; cd '$BackendDir'; .venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port $BackendPort"
     ) -WindowStyle Hidden
 }
 
@@ -114,5 +116,10 @@ if (-not (Test-Port $FrontendPort)) {
 
 Write-Host "Demo backend:  http://127.0.0.1:$BackendPort"
 Write-Host "Demo frontend: http://127.0.0.1:$FrontendPort"
-Write-Host "Mock mode is enabled for stable recording."
+if ($UseRealLlm) {
+    Write-Host "Real LLM mode requested. Configure backend/.env before testing."
+}
+else {
+    Write-Host "Mock mode is enabled for stable recording."
+}
 Write-Host "Frontend mode: $FrontendMode"
