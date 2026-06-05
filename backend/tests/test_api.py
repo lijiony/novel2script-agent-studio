@@ -1,6 +1,35 @@
 from fastapi.testclient import TestClient
 
+from app.core.config import Settings, get_settings
+from app.dependencies import get_run_store
+from app.domain.schemas import RunStatus
 from app.main import app
+from app.services.llm_client import LlmClient
+from app.services.run_store import RunStore
+
+
+SAMPLE_TEXT = """第一章 开始
+林夏收到第一封信。
+
+第二章 剧院
+林夏遇到周砚。
+
+第三章 台词
+林夏找到地址。
+"""
+
+
+def _client_with_store(tmp_path):
+    settings = Settings(
+        USE_MOCK_LLM=True,
+        OPENAI_API_KEY=None,
+        OPENAI_BASE_URL=None,
+        RUNS_DIR=tmp_path,
+    )
+    store = RunStore(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_run_store] = lambda: store
+    return TestClient(app), store
 
 
 def test_schema_endpoint_returns_json_schema():
@@ -10,3 +39,142 @@ def test_schema_endpoint_returns_json_schema():
     payload = response.json()
     assert payload["title"] == "ScriptJson"
     assert "properties" in payload
+
+
+def test_llm_status_defaults_to_mock(tmp_path):
+    client, _store = _client_with_store(tmp_path)
+    try:
+        response = client.get("/api/llm/status")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["mode"] == "mock"
+        assert payload["api_key_configured"] is False
+        assert "api_key" not in payload
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_llm_test_reports_missing_key_in_real_mode(tmp_path):
+    settings = Settings(USE_MOCK_LLM=False, OPENAI_API_KEY=None, RUNS_DIR=tmp_path)
+    store = RunStore(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_run_store] = lambda: store
+    client = TestClient(app)
+    try:
+        response = client.post("/api/llm/test")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["mode"] == "mock"
+        assert payload["success"] is False
+        assert "missing" in payload["message"].lower()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_llm_test_reports_real_connection_success(tmp_path, monkeypatch):
+    settings = Settings(USE_MOCK_LLM=False, OPENAI_API_KEY="test-key", RUNS_DIR=tmp_path)
+    store = RunStore(tmp_path)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_run_store] = lambda: store
+
+    def fake_generate_json(self, _system_prompt, _user_payload):
+        assert self.mock is False
+        return {"ok": True}
+
+    monkeypatch.setattr(LlmClient, "generate_json", fake_generate_json)
+    client = TestClient(app)
+    try:
+        response = client.post("/api/llm/test")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["mode"] == "real"
+        assert payload["success"] is True
+        assert payload["api_key_configured"] is True
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_intake_rejects_less_than_three_chapters(tmp_path):
+    client, _store = _client_with_store(tmp_path)
+    try:
+        response = client.post(
+            "/api/runs/intake",
+            data={"text": "第一章 开始\n只有一章。"},
+        )
+        assert response.status_code == 400
+        assert "at least 3 chapter" in response.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_compat_run_rejects_less_than_three_chapters(tmp_path):
+    client, _store = _client_with_store(tmp_path)
+    try:
+        response = client.post(
+            "/api/runs",
+            data={"text": "第一章 开始\n只有一章。"},
+        )
+        assert response.status_code == 400
+        assert "at least 3 chapter" in response.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_intake_generates_adaptation_plan(tmp_path):
+    client, store = _client_with_store(tmp_path)
+    try:
+        response = client.post("/api/runs/intake", data={"text": SAMPLE_TEXT})
+        assert response.status_code == 200
+        run_id = response.json()["run_id"]
+        manifest = store.read_manifest(run_id)
+        assert manifest.status == RunStatus.planned
+        assert "chapter_cards.json" in manifest.artifacts
+        assert "story_bible.json" in manifest.artifacts
+        assert "story_bible.md" in manifest.artifacts
+        assert "adaptation_plan.json" in manifest.artifacts
+        assert "adaptation_plan.md" in manifest.artifacts
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_generate_requires_completed_intake(tmp_path):
+    client, store = _client_with_store(tmp_path)
+    try:
+        manifest = store.create_run(SAMPLE_TEXT)
+        response = client.post(
+            f"/api/runs/{manifest.run_id}/generate",
+            json={"controls": {"format_type": "short_drama"}},
+        )
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_generate_uses_author_controls_after_intake(tmp_path):
+    client, store = _client_with_store(tmp_path)
+    try:
+        intake = client.post("/api/runs/intake", data={"text": SAMPLE_TEXT})
+        run_id = intake.json()["run_id"]
+
+        response = client.post(
+            f"/api/runs/{run_id}/generate",
+            json={
+                "controls": {
+                    "format_type": "short_drama",
+                    "adaptation_scale": "faithful",
+                    "style_focus": "psychological",
+                    "preserve_items": ["保留林夏"],
+                    "forbidden_changes": ["不要改变父亲失踪设定"],
+                    "author_notes": "心理活动要转成动作。",
+                }
+            },
+        )
+
+        assert response.status_code == 200
+        manifest = store.read_manifest(run_id)
+        script = store.read_json(run_id, "script.json")
+        assert manifest.status == RunStatus.succeeded
+        assert script["adaptation_profile"]["adaptation_scale"] == "faithful"
+        assert "script.yaml" in manifest.artifacts
+    finally:
+        app.dependency_overrides.clear()

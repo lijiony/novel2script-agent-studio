@@ -17,6 +17,37 @@ class LlmClient:
                 base_url=settings.openai_base_url,
             )
 
+    def status(self) -> dict[str, Any]:
+        return {
+            "mode": "mock" if self.mock else "real",
+            "use_mock_llm": self.settings.use_mock_llm,
+            "api_key_configured": bool(self.settings.openai_api_key),
+            "base_url_configured": bool(self.settings.openai_base_url),
+            "model": self.settings.openai_model,
+        }
+
+    def test_connection(self) -> dict[str, Any]:
+        status = self.status()
+        if self.mock:
+            message = (
+                "Mock mode is enabled."
+                if self.settings.use_mock_llm
+                else "OPENAI_API_KEY is missing, so the backend falls back to mock mode."
+            )
+            return {**status, "success": self.settings.use_mock_llm, "message": message}
+        try:
+            payload = self.generate_json(
+                "Return JSON only. The JSON object must be exactly compatible with this request.",
+                {"task": "connection_test", "expected": {"ok": True}},
+            )
+        except Exception as exc:  # pragma: no cover - network/provider dependent
+            return {**status, "success": False, "message": str(exc)}
+        return {
+            **status,
+            "success": True,
+            "message": f"Connected to {self.settings.openai_model}. Response keys: {', '.join(payload.keys()) or 'none'}.",
+        }
+
     def generate_json(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
         if self.mock:
             raise RuntimeError("Mock LLM does not generate remote JSON.")

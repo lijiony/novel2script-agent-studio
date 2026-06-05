@@ -12,6 +12,7 @@ export type RunStage = {
 export type RunStatus =
   | "queued"
   | "running"
+  | "planned"
   | "validating"
   | "repairing"
   | "exporting"
@@ -42,6 +43,46 @@ export type ValidationReport = {
   issues: ValidationIssue[];
 };
 
+export type ScriptFormat =
+  | "film"
+  | "short_drama"
+  | "stage_play"
+  | "radio_drama"
+  | "animation"
+  | "game_script";
+
+export type AdaptationScale = "faithful" | "balanced" | "bold";
+
+export type StyleFocus =
+  | "psychological"
+  | "action"
+  | "dialogue"
+  | "suspense"
+  | "relationship"
+  | "custom";
+
+export type AuthorControls = {
+  format_type: ScriptFormat;
+  adaptation_scale: AdaptationScale;
+  style_focus: StyleFocus;
+  preserve_items: string[];
+  forbidden_changes: string[];
+  author_notes?: string | null;
+};
+
+export type LlmStatus = {
+  mode: "mock" | "real";
+  use_mock_llm: boolean;
+  api_key_configured: boolean;
+  base_url_configured: boolean;
+  model: string;
+};
+
+export type LlmTestResult = LlmStatus & {
+  success: boolean;
+  message: string;
+};
+
 export async function createRun(text: string, file?: File | null): Promise<RunInfo> {
   const form = new FormData();
   if (file) {
@@ -52,6 +93,42 @@ export async function createRun(text: string, file?: File | null): Promise<RunIn
   const response = await fetch(`${API_BASE_URL}/api/runs`, {
     method: "POST",
     body: form,
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  const result = await response.json();
+  return getRun(result.run_id);
+}
+
+export async function intakeRun(text: string, file?: File | null): Promise<RunInfo> {
+  const form = new FormData();
+  if (file) {
+    form.append("file", file);
+  } else {
+    form.append("text", text);
+  }
+  const response = await fetch(`${API_BASE_URL}/api/runs/intake`, {
+    method: "POST",
+    body: form,
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  const result = await response.json();
+  return getRun(result.run_id);
+}
+
+export async function generateRun(
+  runId: string,
+  controls: AuthorControls,
+): Promise<RunInfo> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/generate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ controls }),
   });
   if (!response.ok) {
     throw new Error(await errorText(response));
@@ -104,6 +181,24 @@ export async function validateYaml(
   }
   const result = await response.json();
   return result.report;
+}
+
+export async function getLlmStatus(): Promise<LlmStatus> {
+  const response = await fetch(`${API_BASE_URL}/api/llm/status`);
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function testLlmConnection(): Promise<LlmTestResult> {
+  const response = await fetch(`${API_BASE_URL}/api/llm/test`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
 }
 
 async function errorText(response: Response): Promise<string> {

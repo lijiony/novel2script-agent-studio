@@ -2,6 +2,40 @@
 
 Use these descriptions when creating GitHub pull requests. Each PR should include feature description, implementation approach, and test method.
 
+## PR: feat: add two-stage adaptation planning workflow
+
+Feature description:
+
+Upgrades Novel2Script from one-shot YAML generation into an AI adaptation co-writer workflow. The backend now supports intake planning before script generation, records author controls, and produces traceable YAML with scene purpose, conflict, emotional shift, source excerpt, AI-added content, revision suggestions, production risk, and origin markers.
+
+Implementation approach:
+
+Adds Pydantic models for author controls and adaptation plans, introduces `/api/runs/intake` and `/api/runs/{run_id}/generate`, splits the LangGraph workflow into planning and generation phases, and keeps the old `/api/runs` endpoint as a compatibility one-shot flow. The frontend workbench is redesigned into three columns: input/control, AI adaptation plan, and YAML/report. Documentation and samples describe the AI co-writer positioning.
+
+Test method:
+
+- Ran backend pytest covering intake rejection, plan generation, generation preconditions, author controls, schema validation, and mock workflow.
+- Ran frontend build and Playwright smoke flow for `分析小说 -> 选择选项 -> 生成剧本 -> 校验 YAML`.
+- Ran full `.\scripts\check.ps1` before final push.
+
+## PR: chore: harden demo and check scripts
+
+Feature description:
+
+Improves local demo reliability, submission verification, and final validation honesty. The Windows demo script now serves the frontend with a production build by default for clean screen recording, and a stop script is available to clean up local demo processes. The local check script now fails immediately when backend tests, frontend build, or Playwright smoke tests fail. Backend workflow runs now fail clearly if one automatic repair still leaves validation errors, and the YAML editor re-applies Monaco schema settings when the schema arrives after mount.
+
+Implementation approach:
+
+Adds `scripts/stop-demo.ps1`, updates `scripts/start-demo.ps1` with a `production` / `dev` frontend mode, copies Next.js standalone static assets for production serving, and adds native command exit-code checking to both demo and check scripts. The backend package configuration now only discovers the `app` package, so temporary `runs/` artifacts cannot break editable installs. The workflow marks unrepaired validation failures as `failed_validation`, and `RunStore.fail()` marks the current stage failed for clearer UI state. The YAML editor stores the Monaco instance and configures `monaco-yaml` whenever the schema becomes available. The root README documents the production demo flow, development mode, PR branch precheck, and stop command. Temporary frontend screenshots are ignored through `.gitignore`.
+
+Test method:
+
+- Ran `.\scripts\start-demo.ps1` and confirmed `http://127.0.0.1:8000/health` returns OK.
+- Confirmed the production frontend responds at `http://127.0.0.1:3000`.
+- Ran `.\scripts\stop-demo.ps1` and confirmed local demo processes are cleaned up.
+- Ran targeted backend tests for run store and workflow failure handling.
+- Ran `.\scripts\check.ps1`; 13 backend pytest tests, frontend build, and Playwright smoke test passed.
+
 ## PR: docs: add final demo rehearsal guide
 
 Feature description:
@@ -34,4 +68,4 @@ The repository also contains visible commits for:
 
 ## Merge Guidance
 
-Merge this PR into `main` before final submission so the default branch contains the latest demo rehearsal and sample output files.
+Merge the latest PR branch into `main` before final submission so the default branch contains the final demo scripts, rehearsal docs, and sample output files.

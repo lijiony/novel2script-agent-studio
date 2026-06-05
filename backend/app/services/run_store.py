@@ -11,8 +11,14 @@ ALLOWED_ARTIFACTS = {
     "manifest.json",
     "input.txt",
     "chapters.json",
+    "chapter_cards.json",
     "reader_output.json",
+    "story_bible.json",
+    "story_bible.md",
     "planner_output.json",
+    "adaptation_plan.json",
+    "adaptation_plan.md",
+    "author_controls.json",
     "script.json",
     "script.yaml",
     "schema.json",
@@ -24,8 +30,10 @@ ALLOWED_ARTIFACTS = {
 WORKFLOW_STAGES = [
     "validate_input",
     "parse_chapters",
-    "extract_story_facts",
-    "plan_scenes",
+    "read_chapters_individually",
+    "build_story_bible",
+    "plan_adaptation",
+    "await_author_controls",
     "generate_script_json",
     "validate_schema",
     "repair_once_if_needed",
@@ -130,12 +138,27 @@ class RunStore:
         manifest = self.read_manifest(run_id)
         manifest.status = status
         manifest.error = error
+        if manifest.current_stage:
+            for stage in manifest.stages:
+                if stage.name == manifest.current_stage and stage.status == "running":
+                    stage.status = "failed"
+                    stage.message = error
+                    stage.finished_at = now_iso()
+                    break
         self.write_manifest(manifest)
         return manifest
 
     def succeed(self, run_id: str) -> RunManifest:
         manifest = self.read_manifest(run_id)
         manifest.status = RunStatus.succeeded
+        manifest.current_stage = None
+        manifest.error = None
+        self.write_manifest(manifest)
+        return manifest
+
+    def planned(self, run_id: str) -> RunManifest:
+        manifest = self.read_manifest(run_id)
+        manifest.status = RunStatus.planned
         manifest.current_stage = None
         manifest.error = None
         self.write_manifest(manifest)

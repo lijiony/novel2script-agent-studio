@@ -1,7 +1,7 @@
 "use client";
 
-import Editor, { type OnMount } from "@monaco-editor/react";
-import { useMemo, useState } from "react";
+import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { configureMonacoYaml } from "monaco-yaml";
 
 type Props = {
@@ -12,25 +12,48 @@ type Props = {
 
 export function YamlEditor({ value, schema, onChange }: Props) {
   const [fallback, setFallback] = useState(false);
+  const monacoRef = useRef<Monaco | null>(null);
+  const yamlConfigRef = useRef<{ dispose: () => void } | null>(null);
   const schemaUri = useMemo(() => "inmemory://model/script.schema.json", []);
 
-  const handleMount: OnMount = (_editor, monaco) => {
-    if (!schema) {
+  function configureYaml(monaco: Monaco, nextSchema: Record<string, unknown>) {
+    yamlConfigRef.current?.dispose();
+    yamlConfigRef.current = configureMonacoYaml(monaco, {
+      enableSchemaRequest: false,
+      schemas: [
+        {
+          uri: schemaUri,
+          fileMatch: ["script.yaml"],
+          schema: nextSchema,
+        },
+      ],
+    });
+  }
+
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || !schema) {
       return;
     }
     try {
-      configureMonacoYaml(monaco, {
-        enableSchemaRequest: false,
-        schemas: [
-          {
-            uri: schemaUri,
-            fileMatch: ["script.yaml"],
-            schema,
-          },
-        ],
-      });
+      configureYaml(monaco, schema);
     } catch {
       setFallback(true);
+    }
+    return () => {
+      yamlConfigRef.current?.dispose();
+      yamlConfigRef.current = null;
+    };
+  }, [schema, schemaUri]);
+
+  const handleMount: OnMount = (_editor, monaco) => {
+    monacoRef.current = monaco;
+    if (schema) {
+      try {
+        configureYaml(monaco, schema);
+      } catch {
+        setFallback(true);
+      }
     }
   };
 
@@ -48,7 +71,7 @@ export function YamlEditor({ value, schema, onChange }: Props) {
   return (
     <div className="editor-wrap">
       <Editor
-        height="520px"
+        height="100%"
         defaultLanguage="yaml"
         path="script.yaml"
         value={value}

@@ -3,8 +3,11 @@ from fastapi.responses import FileResponse
 
 from app.core.config import Settings, get_settings
 from app.dependencies import get_run_store
+from app.domain.chapter_parser import ChapterParseError, parse_chapters
 from app.domain.schemas import (
     CreateRunResponse,
+    GenerateRunRequest,
+    RunStatus,
     RunStatusResponse,
     YamlValidationRequest,
     YamlValidationResponse,
@@ -31,9 +34,52 @@ async def create_run(
             status_code=413,
             detail=f"Input is too long. Limit is {settings.max_input_chars} characters.",
         )
+    _assert_three_chapters(input_text, settings)
     manifest = store.create_run(input_text)
     workflow = AdaptationWorkflow(settings, store)
     background_tasks.add_task(workflow.run, manifest.run_id)
+    return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
+
+
+@router.post("/runs/intake", response_model=CreateRunResponse)
+async def intake_run(
+    background_tasks: BackgroundTasks,
+    text: str | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+    settings: Settings = Depends(get_settings),
+    store: RunStore = Depends(get_run_store),
+) -> CreateRunResponse:
+    input_text = await _read_input(text, file)
+    if len(input_text) > settings.max_input_chars:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Input is too long. Limit is {settings.max_input_chars} characters.",
+        )
+    _assert_three_chapters(input_text, settings)
+    manifest = store.create_run(input_text)
+    workflow = AdaptationWorkflow(settings, store)
+    background_tasks.add_task(workflow.plan, manifest.run_id)
+    return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
+
+
+@router.post("/runs/{run_id}/generate", response_model=CreateRunResponse)
+def generate_run(
+    run_id: str,
+    request: GenerateRunRequest,
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(get_settings),
+    store: RunStore = Depends(get_run_store),
+) -> CreateRunResponse:
+    try:
+        manifest = store.read_manifest(run_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Run not found.") from exc
+    if "adaptation_plan.json" not in manifest.artifacts:
+        raise HTTPException(status_code=400, detail="Run must complete intake planning first.")
+    if manifest.status not in {RunStatus.planned, RunStatus.succeeded, RunStatus.failed_validation}:
+        raise HTTPException(status_code=409, detail="Run is not ready for generation.")
+    workflow = AdaptationWorkflow(settings, store)
+    background_tasks.add_task(workflow.generate, manifest.run_id, request.controls)
     return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
 
 
@@ -58,7 +104,12 @@ def get_artifact(run_id: str, artifact: str, store: RunStore = Depends(get_run_s
     if artifact not in ALLOWED_ARTIFACTS:
         raise HTTPException(status_code=404, detail="Artifact is not allowed.")
     try:
+        manifest = store.read_manifest(run_id)
+        if artifact not in manifest.artifacts:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
         path = store.artifact_path(run_id, artifact)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=404, detail="Run not found.") from exc
     if not path.exists():
@@ -95,6 +146,13 @@ async def _read_input(text: str | None, file: UploadFile | None) -> str:
     if text is not None and text.strip():
         return text
     raise HTTPException(status_code=400, detail="Provide novel text or a .txt file.")
+
+
+def _assert_three_chapters(input_text: str, settings: Settings) -> None:
+    try:
+        parse_chapters(input_text, max_chars=settings.max_input_chars)
+    except ChapterParseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _artifact_media_type(artifact: str) -> str:

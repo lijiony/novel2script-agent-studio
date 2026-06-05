@@ -2,21 +2,56 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
-Push-Location (Join-Path $RepoRoot "backend")
-if (-not (Test-Path ".venv")) {
-    uv venv
-    uv pip install -e ".[dev]"
+function Invoke-Checked {
+    param(
+        [string]$Command,
+        [string[]]$Arguments
+    )
+
+    & $Command @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Command $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+    }
 }
-.venv\Scripts\python -m pytest
-Pop-Location
+
+function Assert-CommandExists {
+    param([string]$Command)
+
+    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+        throw "Required command '$Command' was not found. Install it before running this script."
+    }
+}
+
+Assert-CommandExists "uv"
+Assert-CommandExists "npm"
+Assert-CommandExists "npx"
+
+& (Join-Path $PSScriptRoot "stop-demo.ps1")
+
+Push-Location (Join-Path $RepoRoot "backend")
+try {
+    Remove-Item -Recurse -Force "runs" -ErrorAction SilentlyContinue
+    if (-not (Test-Path ".venv")) {
+        Invoke-Checked "uv" @("venv")
+    }
+    Invoke-Checked "uv" @("pip", "install", "-e", ".[dev]")
+    Invoke-Checked ".venv\Scripts\python" @("-m", "pytest")
+}
+finally {
+    Pop-Location
+}
 
 Push-Location (Join-Path $RepoRoot "frontend")
-if (-not (Test-Path "node_modules")) {
-    npm install
+try {
+    if (-not (Test-Path "node_modules")) {
+        Invoke-Checked "npm" @("install")
+    }
+    Invoke-Checked "npm" @("run", "build")
+    Invoke-Checked "npx" @("playwright", "install", "chromium")
+    Invoke-Checked "npx" @("playwright", "test")
 }
-npm run build
-npx playwright install chromium
-npx playwright test
-Pop-Location
+finally {
+    Pop-Location
+}
 
 Write-Host "All local checks passed."
