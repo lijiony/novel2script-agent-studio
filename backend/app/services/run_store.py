@@ -130,6 +130,13 @@ class RunStore:
         manifest = self.read_manifest(run_id)
         manifest.status = status
         manifest.error = error
+        if manifest.current_stage:
+            for stage in manifest.stages:
+                if stage.name == manifest.current_stage and stage.status == "running":
+                    stage.status = "failed"
+                    stage.message = error
+                    stage.finished_at = now_iso()
+                    break
         self.write_manifest(manifest)
         return manifest
 

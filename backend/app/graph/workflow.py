@@ -21,6 +21,10 @@ from app.services.schema_docs import schema_markdown
 from app.services.yaml_exporter import export_yaml
 
 
+class WorkflowValidationError(Exception):
+    pass
+
+
 class AdaptationWorkflow:
     def __init__(self, settings: Settings, store: RunStore):
         self.settings = settings
@@ -33,7 +37,7 @@ class AdaptationWorkflow:
             input_text = self.store.read_input(run_id)
             self.graph.invoke({"run_id": run_id, "input_text": input_text})
             self.store.succeed(run_id)
-        except ChapterParseError as exc:
+        except (ChapterParseError, WorkflowValidationError) as exc:
             self.store.fail(run_id, RunStatus.failed_validation, str(exc))
         except Exception as exc:  # pragma: no cover - integration guard
             self.store.fail(run_id, RunStatus.failed_internal, str(exc))
@@ -137,6 +141,11 @@ class AdaptationWorkflow:
         report_payload = report.model_dump(mode="json")
         self.store.write_json(state["run_id"], "report.json", report_payload)
         message = report.summary
+        if state.get("repaired") and not report.valid:
+            self.store.set_stage(state["run_id"], "validate_schema", "failed", message=message)
+            raise WorkflowValidationError(
+                "Validation still failed after one automatic repair attempt."
+            )
         self._finish_stage(state, "validate_schema", message)
         return {**state, "validation_report": report_payload}
 

@@ -23,6 +23,14 @@ function Invoke-Checked {
     }
 }
 
+function Assert-CommandExists {
+    param([string]$Command)
+
+    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+        throw "Required command '$Command' was not found. Install it before running this script."
+    }
+}
+
 function Test-Port([int]$Port) {
     try {
         return (Test-NetConnection -ComputerName 127.0.0.1 -Port $Port -WarningAction SilentlyContinue).TcpTestSucceeded
@@ -32,12 +40,18 @@ function Test-Port([int]$Port) {
     }
 }
 
+Assert-CommandExists "uv"
+Assert-CommandExists "npm"
+Assert-CommandExists "npx"
+
 if (-not (Test-Path (Join-Path $BackendDir ".venv"))) {
     Push-Location $BackendDir
     Invoke-Checked "uv" @("venv")
-    Invoke-Checked "uv" @("pip", "install", "-e", ".[dev]")
     Pop-Location
 }
+Push-Location $BackendDir
+Invoke-Checked "uv" @("pip", "install", "-e", ".[dev]")
+Pop-Location
 
 if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
     Push-Location $FrontendDir

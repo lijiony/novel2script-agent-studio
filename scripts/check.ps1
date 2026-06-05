@@ -14,14 +14,27 @@ function Invoke-Checked {
     }
 }
 
+function Assert-CommandExists {
+    param([string]$Command)
+
+    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+        throw "Required command '$Command' was not found. Install it before running this script."
+    }
+}
+
+Assert-CommandExists "uv"
+Assert-CommandExists "npm"
+Assert-CommandExists "npx"
+
 & (Join-Path $PSScriptRoot "stop-demo.ps1")
 
 Push-Location (Join-Path $RepoRoot "backend")
 try {
+    Remove-Item -Recurse -Force "runs" -ErrorAction SilentlyContinue
     if (-not (Test-Path ".venv")) {
         Invoke-Checked "uv" @("venv")
-        Invoke-Checked "uv" @("pip", "install", "-e", ".[dev]")
     }
+    Invoke-Checked "uv" @("pip", "install", "-e", ".[dev]")
     Invoke-Checked ".venv\Scripts\python" @("-m", "pytest")
 }
 finally {

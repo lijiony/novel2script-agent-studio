@@ -6,10 +6,7 @@ $CurrentPid = $PID
 $processes = Get-CimInstance Win32_Process | Where-Object {
     $_.ProcessId -ne $CurrentPid -and
     $_.Name -in @("python.exe", "node.exe", "powershell.exe") -and
-    (
-        $_.CommandLine -like "*$RepoRoot*" -or
-        $_.CommandLine -like "*.next\standalone\server.js*"
-    )
+    $_.CommandLine -like "*$RepoRoot*"
 }
 
 foreach ($process in $processes) {

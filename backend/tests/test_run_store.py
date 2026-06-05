@@ -19,3 +19,18 @@ def test_artifact_whitelist(tmp_path):
         assert "not allowed" in str(exc)
     else:
         raise AssertionError("Path traversal artifact should fail")
+
+
+def test_fail_marks_current_running_stage_failed(tmp_path):
+    store = RunStore(tmp_path)
+    manifest = store.create_run("hello")
+    store.set_stage(manifest.run_id, "validate_input", "running", run_status=RunStatus.running)
+
+    failed = store.fail(manifest.run_id, RunStatus.failed_validation, "bad input")
+
+    assert failed.status == RunStatus.failed_validation
+    assert failed.error == "bad input"
+    validate_stage = next(stage for stage in failed.stages if stage.name == "validate_input")
+    assert validate_stage.status == "failed"
+    assert validate_stage.message == "bad input"
+    assert validate_stage.finished_at is not None

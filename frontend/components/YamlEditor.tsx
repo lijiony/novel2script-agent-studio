@@ -1,7 +1,7 @@
 "use client";
 
-import Editor, { type OnMount } from "@monaco-editor/react";
-import { useMemo, useState } from "react";
+import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { configureMonacoYaml } from "monaco-yaml";
 
 type Props = {
@@ -12,14 +12,18 @@ type Props = {
 
 export function YamlEditor({ value, schema, onChange }: Props) {
   const [fallback, setFallback] = useState(false);
+  const monacoRef = useRef<Monaco | null>(null);
+  const yamlConfigRef = useRef<{ dispose: () => void } | null>(null);
   const schemaUri = useMemo(() => "inmemory://model/script.schema.json", []);
 
-  const handleMount: OnMount = (_editor, monaco) => {
-    if (!schema) {
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || !schema) {
       return;
     }
     try {
-      configureMonacoYaml(monaco, {
+      yamlConfigRef.current?.dispose();
+      yamlConfigRef.current = configureMonacoYaml(monaco, {
         enableSchemaRequest: false,
         schemas: [
           {
@@ -32,6 +36,14 @@ export function YamlEditor({ value, schema, onChange }: Props) {
     } catch {
       setFallback(true);
     }
+    return () => {
+      yamlConfigRef.current?.dispose();
+      yamlConfigRef.current = null;
+    };
+  }, [schema, schemaUri]);
+
+  const handleMount: OnMount = (_editor, monaco) => {
+    monacoRef.current = monaco;
   };
 
   if (fallback) {
