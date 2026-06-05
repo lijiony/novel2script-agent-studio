@@ -1,30 +1,40 @@
 import { expect, test } from "@playwright/test";
 
-test("plans adaptation before generating editable YAML", async ({ page }) => {
+test("opens the artifact panel only after generation or explicit artifact actions", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "Novel2Script Agent Studio" })).toBeVisible();
-  await page.getByRole("button", { name: "分析小说" }).click();
+  await expect(page.getByRole("heading", { name: /把小说改成/ })).toBeVisible();
+  await expect(page.getByTestId("artifact-panel")).toHaveCount(0);
 
-  await expect(page.getByText("状态：planned")).toBeVisible({ timeout: 45_000 });
-  await expect(page.locator(".plan-report")).toContainText("Recommended format");
+  await page.getByRole("button", { name: "开始分析" }).click();
+  await expect(page.getByTestId("artifact-panel")).toHaveCount(0);
+
+  await expect(page.getByText("副编剧建议")).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByRole("button", { name: "采纳计划并生成剧本" })).toBeVisible();
+  await expect(page.getByTestId("artifact-panel")).toHaveCount(0);
+
   await page.getByLabel("剧本类型").selectOption("short_drama");
   await page.getByLabel("改编尺度").selectOption("faithful");
   await page.getByLabel("风格偏向").selectOption("psychological");
   await page.getByLabel("作者备注").fill("心理活动要转成可表演动作。");
-  await page.getByRole("button", { name: "生成剧本" }).click();
+  await page.getByRole("button", { name: "采纳计划并生成剧本" }).click();
 
-  await expect(page.getByText("状态：succeeded")).toBeVisible({ timeout: 45_000 });
-  await expect(page.getByText("generate_report")).toBeVisible();
+  await expect(page.getByText("剧本已生成")).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByTestId("artifact-panel")).toBeVisible();
   await expect(page.getByText("重新校验 YAML")).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载当前 YAML" })).toBeEnabled();
 
   await page.getByRole("button", { name: "重新校验 YAML" }).click();
   await expect(page.getByText("校验通过")).toBeVisible();
-  await expect(page.getByRole("button", { name: "下载当前 YAML" })).toBeEnabled();
-  await expect(page.getByText("计划与中间产物")).toBeVisible();
-  await expect(page.getByText("最终交付产物")).toBeVisible();
-  await expect(page.getByText("下载 adaptation_plan.json")).toBeVisible();
-  await expect(page.getByText("下载 reader_output.json")).toBeVisible();
-  await expect(page.getByText("下载 planner_output.json")).toBeVisible();
+
+  await page.getByRole("button", { name: "关闭产物面板" }).click();
+  await expect(page.getByTestId("artifact-panel")).toHaveCount(0);
+
+  await page.locator(".sidebar-actions").getByRole("button", { name: "查看报告" }).click();
+  await expect(page.getByTestId("artifact-panel")).toBeVisible();
+  await expect(page.getByTestId("artifact-panel").getByRole("button", { name: "改编报告" })).toHaveClass(/active/);
+
+  await page.locator(".sidebar-actions").getByRole("button", { name: "下载产物" }).click();
   await expect(page.getByText("下载 script.yaml")).toBeVisible();
+  await expect(page.getByText("下载 adaptation_plan.json")).toBeVisible();
 });
