@@ -221,17 +221,30 @@ export default function Home() {
   }
 
   async function loadPlan(runId: string) {
-    const plan = await getArtifact(runId, "adaptation_plan.md");
+    const plan = await getArtifactWithRetry(runId, "adaptation_plan.md");
     setPlanMarkdown(plan);
   }
 
   async function loadFinalArtifacts(runId: string) {
     const [yaml, report] = await Promise.all([
-      getArtifact(runId, "script.yaml"),
-      getArtifact(runId, "adaptation_report.md"),
+      getArtifactWithRetry(runId, "script.yaml"),
+      getArtifactWithRetry(runId, "adaptation_report.md"),
     ]);
     setYamlText(yaml);
     setReportMarkdown(report);
+  }
+
+  async function getArtifactWithRetry(runId: string, artifact: string): Promise<string> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        return await getArtifact(runId, artifact);
+      } catch (nextError) {
+        lastError = nextError;
+        await new Promise((resolve) => window.setTimeout(resolve, 350));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   function updateControl<K extends keyof AuthorControls>(key: K, value: AuthorControls[K]) {

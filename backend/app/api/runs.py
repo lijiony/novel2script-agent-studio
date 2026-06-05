@@ -34,6 +34,7 @@ async def create_run(
             status_code=413,
             detail=f"Input is too long. Limit is {settings.max_input_chars} characters.",
         )
+    _assert_three_chapters(input_text, settings)
     manifest = store.create_run(input_text)
     workflow = AdaptationWorkflow(settings, store)
     background_tasks.add_task(workflow.run, manifest.run_id)

@@ -48,6 +48,19 @@ def test_intake_rejects_less_than_three_chapters(tmp_path):
         app.dependency_overrides.clear()
 
 
+def test_compat_run_rejects_less_than_three_chapters(tmp_path):
+    client, _store = _client_with_store(tmp_path)
+    try:
+        response = client.post(
+            "/api/runs",
+            data={"text": "第一章 开始\n只有一章。"},
+        )
+        assert response.status_code == 400
+        assert "at least 3 chapter" in response.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_intake_generates_adaptation_plan(tmp_path):
     client, store = _client_with_store(tmp_path)
     try:

@@ -16,23 +16,27 @@ export function YamlEditor({ value, schema, onChange }: Props) {
   const yamlConfigRef = useRef<{ dispose: () => void } | null>(null);
   const schemaUri = useMemo(() => "inmemory://model/script.schema.json", []);
 
+  function configureYaml(monaco: Monaco, nextSchema: Record<string, unknown>) {
+    yamlConfigRef.current?.dispose();
+    yamlConfigRef.current = configureMonacoYaml(monaco, {
+      enableSchemaRequest: false,
+      schemas: [
+        {
+          uri: schemaUri,
+          fileMatch: ["script.yaml"],
+          schema: nextSchema,
+        },
+      ],
+    });
+  }
+
   useEffect(() => {
     const monaco = monacoRef.current;
     if (!monaco || !schema) {
       return;
     }
     try {
-      yamlConfigRef.current?.dispose();
-      yamlConfigRef.current = configureMonacoYaml(monaco, {
-        enableSchemaRequest: false,
-        schemas: [
-          {
-            uri: schemaUri,
-            fileMatch: ["script.yaml"],
-            schema,
-          },
-        ],
-      });
+      configureYaml(monaco, schema);
     } catch {
       setFallback(true);
     }
@@ -44,6 +48,13 @@ export function YamlEditor({ value, schema, onChange }: Props) {
 
   const handleMount: OnMount = (_editor, monaco) => {
     monacoRef.current = monaco;
+    if (schema) {
+      try {
+        configureYaml(monaco, schema);
+      } catch {
+        setFallback(true);
+      }
+    }
   };
 
   if (fallback) {

@@ -296,16 +296,37 @@ class AdaptationWorkflow:
 
     def _mock_planner_output(self, chapters: list[Chapter]) -> dict[str, Any]:
         scenes = []
+        purposes = [
+            "Establish the inciting clue and turn atmosphere into a visible discovery.",
+            "Introduce the mentor figure and make the hidden past confront the protagonist.",
+            "Convert the textual clue into a decisive next-step action beat.",
+            "Compress the chapter into a high-pressure turning point.",
+            "Resolve the immediate question while opening the next dramatic hook.",
+        ]
+        conflicts = [
+            "林夏想确认信件来源，但信上的旧剧院把父亲失踪重新拉回眼前。",
+            "周砚知道真相却不愿全说，林夏必须在信任和怀疑之间逼近答案。",
+            "旧剧本给出地址，也证明父亲的失踪不是意外，林夏必须选择是否继续。",
+            "线索终于成形，但每个答案都会暴露一个更危险的秘密。",
+            "主角得到短暂确认，却必须付出更大的行动代价。",
+        ]
+        shifts = [
+            "从谨慎好奇到被迫行动。",
+            "从警惕试探到暂时结盟。",
+            "从焦虑困惑到坚定追查。",
+            "从被动接收线索到主动改变计划。",
+            "从短暂释然到意识到更深危机。",
+        ]
         for index, chapter in enumerate(chapters[:5], start=1):
             scenes.append(
                 {
                     "id": f"sc_{index:03d}",
                     "title": chapter.title.replace("章", "幕", 1),
                     "source_chapters": [chapter.index],
-                    "dramatic_purpose": "Turn inner narration into a playable dramatic beat.",
+                    "dramatic_purpose": purposes[index - 1],
                     "key_events": [chapter.text[:100]],
-                    "conflict": "The protagonist wants the truth but every clue increases personal risk.",
-                    "emotional_shift": "From guarded curiosity to active determination.",
+                    "conflict": conflicts[index - 1],
+                    "emotional_shift": shifts[index - 1],
                     "source_excerpt": chapter.text[:140],
                 }
             )
@@ -369,8 +390,30 @@ class AdaptationWorkflow:
         controls: AuthorControls,
     ) -> dict[str, Any]:
         scenes = []
+        action_texts = [
+            "林夏把没有编号的信压在台灯下，翻出父亲旧档案，手指停在同一个剧院名上。",
+            "旧剧院的灯忽明忽暗，周砚挡在舞台边，不让林夏靠近后台的铁门。",
+            "林夏用铅笔圈出第三幕每句台词的首字，把它们连成城北钟楼的地址。",
+            "林夏把零散线索排成时间线，意识到有人一直在引导她走向同一个地点。",
+            "林夏收起旧剧本，关掉舞台灯，只留下信封上的地址在黑暗里发白。",
+        ]
+        dialogue_lines = [
+            "这不是馆里的编号，是他留给我的。",
+            "你认识我父亲，也知道这盏灯为什么还亮着。",
+            "第三幕不是结尾，是路线。",
+            "如果这是警告，他为什么要把每一步都写清楚？",
+            "我会去钟楼，但我要先知道谁希望我去。",
+        ]
+        risks = [
+            "Opening scene needs tactile investigation beats so it does not rely on narration.",
+            "Mentor scene needs blocking and silence to avoid pure exposition.",
+            "Clue-solving scene needs visible pattern discovery so the reveal feels playable.",
+            "Timeline scene may become static; add pressure or interruption if extended.",
+            "Ending beat should preserve suspense instead of over-explaining the next act.",
+        ]
         for scene_plan in planner_output["scenes"]:
             chapter_index = scene_plan["source_chapters"][0]
+            variant_index = min(chapter_index - 1, len(action_texts) - 1)
             location_id = "loc_archive" if chapter_index == 1 else "loc_theater"
             characters = ["char_linxia"] if chapter_index == 1 else ["char_linxia", "char_zhouyan"]
             scenes.append(
@@ -388,11 +431,11 @@ class AdaptationWorkflow:
                     or "A clue demands action while the character fears what it reveals.",
                     "emotional_shift": scene_plan.get("emotional_shift")
                     or "From hesitation to decision.",
-                    "production_risk": "Needs visible behavior so the mystery does not become pure exposition.",
+                    "production_risk": risks[variant_index],
                     "format_type": controls.format_type.value,
                     "actions": [
                         {
-                            "text": f"林夏进入场景，线索推动她继续追查。来源章节：{chapter_index}。",
+                            "text": action_texts[variant_index],
                             "beat": "investigation",
                             "origin": "ai_adapted",
                         }
@@ -400,7 +443,7 @@ class AdaptationWorkflow:
                     "dialogues": [
                         {
                             "speaker_id": "char_linxia",
-                            "line": "这条线索不是偶然留下的。",
+                            "line": dialogue_lines[variant_index],
                             "emotion": "determined",
                             "origin": "ai_adapted",
                         }

@@ -56,21 +56,22 @@ scenes:
     time_of_day: night
     characters:
       - char_linxia
-    purpose: Turn inner narration into a playable dramatic beat.
-    scene_purpose: Turn inner narration into a playable dramatic beat.
-    conflict: The protagonist wants the truth but every clue increases personal 
-      risk.
-    emotional_shift: From guarded curiosity to active determination.
-    production_risk: Needs visible behavior so the mystery does not become pure 
-      exposition.
+    purpose: Establish the inciting clue and turn atmosphere into a visible 
+      discovery.
+    scene_purpose: Establish the inciting clue and turn atmosphere into a 
+      visible discovery.
+    conflict: 林夏想确认信件来源，但信上的旧剧院把父亲失踪重新拉回眼前。
+    emotional_shift: 从谨慎好奇到被迫行动。
+    production_risk: Opening scene needs tactile investigation beats so it does 
+      not rely on narration.
     format_type: short_drama
     actions:
-      - text: 林夏进入场景，线索推动她继续追查。来源章节：1。
+      - text: 林夏把没有编号的信压在台灯下，翻出父亲旧档案，手指停在同一个剧院名上。
         beat: investigation
         origin: ai_adapted
     dialogues:
       - speaker_id: char_linxia
-        line: 这条线索不是偶然留下的。
+        line: 这不是馆里的编号，是他留给我的。
         emotion: determined
         origin: ai_adapted
     ai_added_content:
@@ -91,21 +92,22 @@ scenes:
     characters:
       - char_linxia
       - char_zhouyan
-    purpose: Turn inner narration into a playable dramatic beat.
-    scene_purpose: Turn inner narration into a playable dramatic beat.
-    conflict: The protagonist wants the truth but every clue increases personal 
-      risk.
-    emotional_shift: From guarded curiosity to active determination.
-    production_risk: Needs visible behavior so the mystery does not become pure 
+    purpose: Introduce the mentor figure and make the hidden past confront the 
+      protagonist.
+    scene_purpose: Introduce the mentor figure and make the hidden past confront
+      the protagonist.
+    conflict: 周砚知道真相却不愿全说，林夏必须在信任和怀疑之间逼近答案。
+    emotional_shift: 从警惕试探到暂时结盟。
+    production_risk: Mentor scene needs blocking and silence to avoid pure 
       exposition.
     format_type: short_drama
     actions:
-      - text: 林夏进入场景，线索推动她继续追查。来源章节：2。
+      - text: 旧剧院的灯忽明忽暗，周砚挡在舞台边，不让林夏靠近后台的铁门。
         beat: investigation
         origin: ai_adapted
     dialogues:
       - speaker_id: char_linxia
-        line: 这条线索不是偶然留下的。
+        line: 你认识我父亲，也知道这盏灯为什么还亮着。
         emotion: determined
         origin: ai_adapted
     ai_added_content:
@@ -126,21 +128,21 @@ scenes:
     characters:
       - char_linxia
       - char_zhouyan
-    purpose: Turn inner narration into a playable dramatic beat.
-    scene_purpose: Turn inner narration into a playable dramatic beat.
-    conflict: The protagonist wants the truth but every clue increases personal 
-      risk.
-    emotional_shift: From guarded curiosity to active determination.
-    production_risk: Needs visible behavior so the mystery does not become pure 
-      exposition.
+    purpose: Convert the textual clue into a decisive next-step action beat.
+    scene_purpose: Convert the textual clue into a decisive next-step action 
+      beat.
+    conflict: 旧剧本给出地址，也证明父亲的失踪不是意外，林夏必须选择是否继续。
+    emotional_shift: 从焦虑困惑到坚定追查。
+    production_risk: Clue-solving scene needs visible pattern discovery so the 
+      reveal feels playable.
     format_type: short_drama
     actions:
-      - text: 林夏进入场景，线索推动她继续追查。来源章节：3。
+      - text: 林夏用铅笔圈出第三幕每句台词的首字，把它们连成城北钟楼的地址。
         beat: investigation
         origin: ai_adapted
     dialogues:
       - speaker_id: char_linxia
-        line: 这条线索不是偶然留下的。
+        line: 第三幕不是结尾，是路线。
         emotion: determined
         origin: ai_adapted
     ai_added_content:
