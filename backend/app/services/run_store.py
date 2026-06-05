@@ -12,6 +12,9 @@ ALLOWED_ARTIFACTS = {
     "input.txt",
     "chapters.json",
     "chapter_cards.json",
+    "chapter_reviews.json",
+    "chapter_chat_messages.json",
+    "workflow_events.json",
     "reader_output.json",
     "story_bible.json",
     "story_bible.md",
@@ -31,6 +34,8 @@ WORKFLOW_STAGES = [
     "validate_input",
     "parse_chapters",
     "read_chapters_individually",
+    "awaiting_chapter_review",
+    "regenerate_chapter",
     "build_story_bible",
     "plan_adaptation",
     "await_author_controls",
@@ -65,6 +70,24 @@ class RunStore:
         self.write_manifest(manifest)
         return manifest
 
+    def list_manifests(self) -> list[RunManifest]:
+        manifests: list[RunManifest] = []
+        for child in self.root.iterdir():
+            if not child.is_dir():
+                continue
+            manifest_path = child / "manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifests.append(
+                    RunManifest.model_validate_json(
+                        manifest_path.read_text(encoding="utf-8")
+                    )
+                )
+            except Exception:
+                continue
+        return sorted(manifests, key=lambda manifest: manifest.updated_at, reverse=True)
+
     def run_dir(self, run_id: str) -> Path:
         safe_id = self._validate_run_id(run_id)
         return self.root / safe_id
@@ -98,6 +121,18 @@ class RunStore:
 
     def read_json(self, run_id: str, artifact: str) -> object:
         return json.loads(self.read_text(run_id, artifact))
+
+    def remove_artifacts(self, run_id: str, artifacts: list[str]) -> None:
+        manifest = self.read_manifest(run_id)
+        for artifact in artifacts:
+            if artifact not in ALLOWED_ARTIFACTS or artifact == "manifest.json":
+                continue
+            path = self.artifact_path(run_id, artifact)
+            if path.exists():
+                path.unlink()
+            if artifact in manifest.artifacts:
+                manifest.artifacts.remove(artifact)
+        self.write_manifest(manifest)
 
     def artifact_path(self, run_id: str, artifact: str) -> Path:
         if artifact not in ALLOWED_ARTIFACTS:
@@ -161,6 +196,21 @@ class RunStore:
         manifest.status = RunStatus.planned
         manifest.current_stage = None
         manifest.error = None
+        self.write_manifest(manifest)
+        return manifest
+
+    def set_status(
+        self,
+        run_id: str,
+        status: RunStatus,
+        *,
+        current_stage: str | None = None,
+        error: str | None = None,
+    ) -> RunManifest:
+        manifest = self.read_manifest(run_id)
+        manifest.status = status
+        manifest.current_stage = current_stage
+        manifest.error = error
         self.write_manifest(manifest)
         return manifest
 

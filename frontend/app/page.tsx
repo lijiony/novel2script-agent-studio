@@ -7,39 +7,34 @@ import { ReportPanel } from "@/components/ReportPanel";
 import {
   API_BASE_URL,
   AuthorControls,
+  ChapterCard,
+  ChapterReviewItem,
   LlmStatus,
   LlmTestResult,
+  RunListItem,
   RunInfo,
   ValidationReport,
+  approveAllChapters,
+  approveChapter,
   artifactUrl,
+  buildPlan,
   generateRun,
   getArtifact,
+  getChapterChatMessages,
+  getChapterReviews,
   getLlmStatus,
   getRun,
   getScriptSchema,
   intakeRun,
+  listRuns,
+  regenerateChapter,
   testLlmConnection,
   validateYaml,
 } from "@/lib/api";
 
 type ArtifactPanel = "chapterCards" | "storyBible" | "yaml" | "report" | "downloads" | "details";
-type ConversationPhase = "idle" | "analyzing" | "planned" | "generating" | "completed" | "failed";
-
-type ChapterCard = {
-  chapter_id: string;
-  chapter_index: number;
-  title: string;
-  char_count: number;
-  summary: string;
-  key_events: string[];
-  characters: string[];
-  locations: string[];
-  conflicts: string[];
-  emotional_beats: string[];
-  clues: string[];
-  adaptation_opportunities: string[];
-  continuity_notes: string[];
-};
+type ConversationPhase = "idle" | "analyzing" | "reviewing" | "planned" | "generating" | "completed" | "failed";
+type ReviewFilter = "all" | "pending" | "attention";
 
 type StoryBible = {
   main_plot: string;
@@ -145,7 +140,7 @@ const focusOptions = [
 
 const stepLabels = [
   "小说输入",
-  "副编剧建议",
+  "章节确认",
   "作者确认",
   "剧本生成",
   "YAML 打磨",
@@ -154,11 +149,23 @@ const stepLabels = [
 export default function Home() {
   const [inputText, setInputText] = useState(sampleText);
   const [file, setFile] = useState<File | null>(null);
+  const [tasks, setTasks] = useState<RunListItem[]>([]);
   const [run, setRun] = useState<RunInfo | null>(null);
   const [controls, setControls] = useState<AuthorControls>(defaultControls);
   const [planMarkdown, setPlanMarkdown] = useState("");
   const [adaptationPlan, setAdaptationPlan] = useState<AdaptationPlan | null>(null);
   const [chapterCards, setChapterCards] = useState<ChapterCard[]>([]);
+  const [chapterReviews, setChapterReviews] = useState<ChapterReviewItem[]>([]);
+  const [reviewsExpanded, setReviewsExpanded] = useState(false);
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  const [openChapterId, setOpenChapterId] = useState<string | null>(null);
+  const [chatChapterId, setChatChapterId] = useState<string | null>(null);
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [assistantDraft, setAssistantDraft] = useState("");
+  const [visibleThinking, setVisibleThinking] = useState("");
+  const [toolEvents, setToolEvents] = useState<string[]>([]);
+  const [typedSummaries, setTypedSummaries] = useState<Record<string, string>>({});
   const [storyBible, setStoryBible] = useState<StoryBible | null>(null);
   const [storyBibleMarkdown, setStoryBibleMarkdown] = useState("");
   const [yamlText, setYamlText] = useState("");
@@ -173,22 +180,32 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const allChaptersApproved = chapterReviews.length > 0
+    && chapterReviews.every((item) => item.review.status === "approved" && item.card);
+  const canBuildPlan = Boolean(run?.run_id && run.status === "awaiting_chapter_review" && allChaptersApproved);
   const canGenerate = Boolean(run?.run_id && run.status === "planned");
   const canValidate = Boolean(run?.run_id && yamlText.trim());
   const isPolling = Boolean(
-    run && !terminalStatuses.has(run.status) && (run.status !== "planned" || generationRequested),
+    run
+      && (
+        (!terminalStatuses.has(run.status) && !["awaiting_chapter_review", "planned"].includes(run.status))
+        || generationRequested
+      ),
   );
   const phase = getConversationPhase(run, isPolling, generationRequested, error, yamlText);
   const fallbackPlan = useMemo(() => parsePlanMarkdown(planMarkdown), [planMarkdown]);
   const hasArtifacts = Boolean(run?.artifacts.length);
   const completed = phase === "completed";
   const totalChapterChars = chapterCards.reduce((sum, card) => sum + card.char_count, 0);
+  const activeChatChapter = chapterReviews.find((item) => item.review.chapter_id === chatChapterId) ?? null;
+  const sidePanelOpen = Boolean(chatChapterId || activeArtifactPanel);
 
   useEffect(() => {
     getScriptSchema()
       .then(setSchema)
       .catch(() => setSchema(null));
     refreshLlmStatus();
+    refreshTasks();
   }, []);
 
   useEffect(() => {
@@ -199,6 +216,14 @@ export default function Home() {
       try {
         const nextRun = await getRun(run.run_id);
         setRun(nextRun);
+        await refreshTasks();
+        if (
+          nextRun.status === "reading_chapters"
+          || nextRun.status === "awaiting_chapter_review"
+          || nextRun.status === "regenerating_chapter"
+        ) {
+          await loadChapterReviewState(nextRun.run_id);
+        }
         if (nextRun.status === "planned") {
           await loadPlanningArtifacts(nextRun.run_id);
           setGenerationRequested(false);
@@ -214,6 +239,30 @@ export default function Home() {
     }, 1200);
     return () => window.clearInterval(timer);
   }, [run, isPolling]);
+
+  useEffect(() => {
+    const timers: number[] = [];
+    for (const item of chapterReviews) {
+      if (!item.card || typedSummaries[item.review.chapter_id] !== undefined) {
+        continue;
+      }
+      const summary = item.card.summary;
+      let cursor = 0;
+      setTypedSummaries((current) => ({ ...current, [item.review.chapter_id]: "" }));
+      const timer = window.setInterval(() => {
+        cursor += 6;
+        setTypedSummaries((current) => ({
+          ...current,
+          [item.review.chapter_id]: summary.slice(0, cursor),
+        }));
+        if (cursor >= summary.length) {
+          window.clearInterval(timer);
+        }
+      }, 18);
+      timers.push(timer);
+    }
+    return () => timers.forEach((timer) => window.clearInterval(timer));
+  }, [chapterReviews, typedSummaries]);
 
   const artifactGroups = useMemo(() => {
     if (!run) {
@@ -248,12 +297,112 @@ export default function Home() {
     ].filter((group) => group.items.length > 0);
   }, [run]);
 
+  function clearRunState() {
+    setRun(null);
+    setPlanMarkdown("");
+    setAdaptationPlan(null);
+    setChapterCards([]);
+    setChapterReviews([]);
+    setReviewsExpanded(false);
+    setReviewFilter("all");
+    setOpenChapterId(null);
+    setChatChapterId(null);
+    setChatMessages([]);
+    setAssistantDraft("");
+    setVisibleThinking("");
+    setToolEvents([]);
+    setTypedSummaries({});
+    setStoryBible(null);
+    setStoryBibleMarkdown("");
+    setYamlText("");
+    setReportMarkdown("");
+    setValidationReport(null);
+    setActiveArtifactPanel(null);
+    setGenerationRequested(false);
+    setError(null);
+  }
+
+  async function refreshTasks() {
+    try {
+      const nextTasks = await listRuns();
+      setTasks(nextTasks);
+    } catch {
+      setTasks([]);
+    }
+  }
+
+  async function loadChapterReviewState(runId: string) {
+    const response = await getChapterReviews(runId);
+    setChapterReviews(response.items);
+    setChapterCards(response.items.flatMap((item) => (item.card ? [item.card] : [])));
+  }
+
+  async function loadRunTask(runId: string) {
+    setBusy(true);
+    setError(null);
+    setActiveArtifactPanel(null);
+    setChatChapterId(null);
+    setChatMessages([]);
+    setAssistantDraft("");
+    setVisibleThinking("");
+    setToolEvents([]);
+    try {
+      const nextRun = await getRun(runId);
+      setRun(nextRun);
+      setPlanMarkdown("");
+      setAdaptationPlan(null);
+      setStoryBible(null);
+      setStoryBibleMarkdown("");
+      setYamlText("");
+      setReportMarkdown("");
+      setValidationReport(null);
+      if (
+        nextRun.artifacts.includes("chapter_reviews.json")
+        || nextRun.artifacts.includes("chapter_cards.json")
+      ) {
+        await loadChapterReviewState(nextRun.run_id);
+      } else {
+        setChapterReviews([]);
+        setChapterCards([]);
+      }
+      if (nextRun.artifacts.includes("adaptation_plan.json")) {
+        await loadPlanningArtifacts(nextRun.run_id);
+      }
+      if (nextRun.artifacts.includes("script.yaml")) {
+        await loadFinalArtifacts(nextRun.run_id);
+      }
+      await refreshTasks();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleNewRun() {
+    clearRunState();
+    setFile(null);
+  }
+
+  function openArtifactPanel(panel: ArtifactPanel) {
+    setChatChapterId(null);
+    setActiveArtifactPanel(panel);
+  }
+
   async function handleIntake() {
     setBusy(true);
     setError(null);
     setPlanMarkdown("");
     setAdaptationPlan(null);
     setChapterCards([]);
+    setChapterReviews([]);
+    setOpenChapterId(null);
+    setChatChapterId(null);
+    setChatMessages([]);
+    setAssistantDraft("");
+    setVisibleThinking("");
+    setToolEvents([]);
+    setTypedSummaries({});
     setStoryBible(null);
     setStoryBibleMarkdown("");
     setYamlText("");
@@ -264,11 +413,186 @@ export default function Home() {
     try {
       const nextRun = await intakeRun(inputText, file);
       setRun(nextRun);
-      if (nextRun.status === "planned") {
+      await refreshTasks();
+      if (
+        nextRun.status === "reading_chapters"
+        || nextRun.status === "awaiting_chapter_review"
+        || nextRun.artifacts.includes("chapter_reviews.json")
+      ) {
+        await loadChapterReviewState(nextRun.run_id);
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleApproveChapter(chapterId: string) {
+    if (!run) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await approveChapter(run.run_id, chapterId);
+      setChapterReviews(response.items);
+      await refreshTasks();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleApproveAllChapters() {
+    if (!run) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await approveAllChapters(run.run_id);
+      setChapterReviews(response.items);
+      await refreshTasks();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRegenerateChapter(chapterId: string) {
+    if (!run) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setPlanMarkdown("");
+      setAdaptationPlan(null);
+      setStoryBible(null);
+      setStoryBibleMarkdown("");
+      setYamlText("");
+      setReportMarkdown("");
+      setValidationReport(null);
+      setActiveArtifactPanel(null);
+      const response = await regenerateChapter(run.run_id, chapterId);
+      setChapterReviews(response.items);
+      setRun({ ...run, status: "regenerating_chapter", current_stage: "regenerate_chapter" });
+      await refreshTasks();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleBuildPlan() {
+    if (!run) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setActiveArtifactPanel(null);
+    try {
+      const nextRun = await buildPlan(run.run_id);
+      setRun({ ...nextRun, status: "planning", current_stage: "build_story_bible" });
+      await refreshTasks();
+      if (nextRun.status === "planned" || nextRun.artifacts.includes("adaptation_plan.json")) {
         await loadPlanningArtifacts(nextRun.run_id);
       }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleOpenChapterChat(chapterId: string) {
+    if (!run) {
+      return;
+    }
+    setChatChapterId(chapterId);
+    setActiveArtifactPanel(null);
+    setAssistantDraft("");
+    setVisibleThinking("");
+    setToolEvents([]);
+    try {
+      const response = await getChapterChatMessages(run.run_id, chapterId);
+      setChatMessages(response.messages.map((message) => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: message.content,
+      })));
+    } catch {
+      setChatMessages([]);
+    }
+  }
+
+  async function handleSendChapterChat() {
+    if (!run || !chatChapterId || !chatInput.trim()) {
+      return;
+    }
+    const message = chatInput.trim();
+    setChatInput("");
+    setChatMessages((current) => [...current, { role: "user", content: message }]);
+    setBusy(true);
+    setAssistantDraft("");
+    setVisibleThinking("");
+    setToolEvents([]);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/runs/${run.run_id}/chapter-cards/${chatChapterId}/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(response.ok ? "Streaming response is empty." : await response.text());
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let collected = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+        for (const eventText of events) {
+          const payload = parseSsePayload(eventText);
+          if (!payload) {
+            continue;
+          }
+          if (payload.type === "visible_thinking") {
+            setVisibleThinking(String(payload.content ?? ""));
+          }
+          if (payload.type === "tool_event") {
+            setToolEvents((current) => [
+              ...current,
+              `${String(payload.name ?? "tool")}：${String(payload.status ?? "ready")}`,
+            ]);
+          }
+          if (payload.type === "assistant_delta") {
+            const chunk = String(payload.content ?? "");
+            collected += chunk;
+            setAssistantDraft(collected);
+          }
+          if (payload.type === "final") {
+            const content = collected || String(payload.content ?? "");
+            setChatMessages((current) => [...current, { role: "assistant", content }]);
+            setAssistantDraft("");
+          }
+          if (payload.type === "error") {
+            throw new Error(String(payload.content ?? "Chapter chat failed."));
+          }
+        }
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setAssistantDraft("");
     } finally {
       setBusy(false);
     }
@@ -405,12 +729,15 @@ export default function Home() {
   }
 
   return (
-    <div className={activeArtifactPanel ? "workspace workspace-with-artifact" : "workspace workspace-compact"}>
+    <div className={sidePanelOpen ? "workspace workspace-with-artifact" : "workspace workspace-compact"}>
       <aside className="sidebar">
         <div className="sidebar-brand">
           <strong>Novel2Script</strong>
           <span>AI 改编副编剧</span>
         </div>
+        <button className="new-run-button" type="button" onClick={handleNewRun}>
+          新建改编
+        </button>
         <div className="run-pill">{phaseLabel(phase)}</div>
         <button className="settings-button" type="button" onClick={() => setSettingsOpen(true)}>
           模型设置
@@ -423,23 +750,24 @@ export default function Home() {
             </div>
           ))}
         </nav>
+        <TaskList activeRunId={run?.run_id ?? null} onSelect={loadRunTask} tasks={tasks} />
         <div className="sidebar-actions">
-          <button type="button" disabled={!chapterCards.length} onClick={() => setActiveArtifactPanel("chapterCards")}>
+          <button type="button" disabled={!chapterCards.length} onClick={() => openArtifactPanel("chapterCards")}>
             章节理解卡
           </button>
-          <button type="button" disabled={!storyBibleMarkdown} onClick={() => setActiveArtifactPanel("storyBible")}>
+          <button type="button" disabled={!storyBibleMarkdown} onClick={() => openArtifactPanel("storyBible")}>
             Story Bible
           </button>
-          <button type="button" disabled={!yamlText} onClick={() => setActiveArtifactPanel("yaml")}>
+          <button type="button" disabled={!yamlText} onClick={() => openArtifactPanel("yaml")}>
             打开 YAML
           </button>
-          <button type="button" disabled={!reportMarkdown && !validationReport} onClick={() => setActiveArtifactPanel("report")}>
+          <button type="button" disabled={!reportMarkdown && !validationReport} onClick={() => openArtifactPanel("report")}>
             查看报告
           </button>
-          <button type="button" disabled={!hasArtifacts} onClick={() => setActiveArtifactPanel("downloads")}>
+          <button type="button" disabled={!hasArtifacts} onClick={() => openArtifactPanel("downloads")}>
             下载产物
           </button>
-          <button type="button" disabled={!run} onClick={() => setActiveArtifactPanel("details")}>
+          <button type="button" disabled={!run} onClick={() => openArtifactPanel("details")}>
             运行详情
           </button>
         </div>
@@ -504,6 +832,29 @@ export default function Home() {
             </AssistantMessage>
           ) : null}
 
+          {chapterReviews.length ? (
+            <AssistantMessage title="章节理解确认">
+              <ChapterReviewWorkbench
+                allApproved={allChaptersApproved}
+                busy={busy}
+                canBuildPlan={canBuildPlan}
+                expanded={reviewsExpanded}
+                filter={reviewFilter}
+                items={chapterReviews}
+                onApprove={handleApproveChapter}
+                onApproveAll={handleApproveAllChapters}
+                onBuildPlan={handleBuildPlan}
+                onDiscuss={handleOpenChapterChat}
+                onFilterChange={setReviewFilter}
+                onRegenerate={handleRegenerateChapter}
+                onToggleExpanded={() => setReviewsExpanded((current) => !current)}
+                openChapterId={openChapterId}
+                setOpenChapterId={setOpenChapterId}
+                typedSummaries={typedSummaries}
+              />
+            </AssistantMessage>
+          ) : null}
+
           {planMarkdown ? (
             <AssistantMessage title="副编剧建议">
               <LongNovelOverview
@@ -552,13 +903,13 @@ export default function Home() {
             <AssistantMessage title="剧本已生成">
               <p>我已经生成 YAML，并标记了来源、AI 新增内容、修改建议和生产提示。</p>
               <div className="inline-actions">
-                <button type="button" onClick={() => setActiveArtifactPanel("yaml")}>
+                <button type="button" onClick={() => openArtifactPanel("yaml")}>
                   打开 YAML
                 </button>
-                <button type="button" onClick={() => setActiveArtifactPanel("report")}>
+                <button type="button" onClick={() => openArtifactPanel("report")}>
                   查看报告
                 </button>
-                <button type="button" onClick={() => setActiveArtifactPanel("downloads")}>
+                <button type="button" onClick={() => openArtifactPanel("downloads")}>
                   下载产物
                 </button>
               </div>
@@ -576,7 +927,21 @@ export default function Home() {
         </section>
       </main>
 
-      {activeArtifactPanel ? (
+      {chatChapterId ? (
+        <ChapterChatPanel
+          assistantDraft={assistantDraft}
+          busy={busy}
+          chapterItem={activeChatChapter}
+          input={chatInput}
+          messages={chatMessages}
+          onChangeInput={setChatInput}
+          onClose={() => setChatChapterId(null)}
+          onRegenerate={handleRegenerateChapter}
+          onSend={handleSendChapterChat}
+          toolEvents={toolEvents}
+          visibleThinking={visibleThinking}
+        />
+      ) : activeArtifactPanel ? (
         <ArtifactPanelView
           activePanel={activeArtifactPanel}
           artifactGroups={artifactGroups}
@@ -595,6 +960,297 @@ export default function Home() {
           yamlText={yamlText}
         />
       ) : null}
+    </div>
+  );
+}
+
+function TaskList({
+  activeRunId,
+  onSelect,
+  tasks,
+}: {
+  activeRunId: string | null;
+  onSelect: (runId: string) => void;
+  tasks: RunListItem[];
+}) {
+  return (
+    <section className="task-list" aria-label="任务列表">
+      <div className="task-list-title">任务</div>
+      {tasks.length ? (
+        tasks.slice(0, 12).map((task) => (
+          <button
+            className={task.run_id === activeRunId ? "task-item active" : "task-item"}
+            key={task.run_id}
+            type="button"
+            onClick={() => onSelect(task.run_id)}
+          >
+            <strong>{task.title || "未命名改编"}</strong>
+            <span>{runStatusLabel(task.status)} · {formatTaskTime(task.updated_at)}</span>
+          </button>
+        ))
+      ) : (
+        <div className="empty-task">还没有任务</div>
+      )}
+    </section>
+  );
+}
+
+function ChapterReviewWorkbench({
+  allApproved,
+  busy,
+  canBuildPlan,
+  expanded,
+  filter,
+  items,
+  onApprove,
+  onApproveAll,
+  onBuildPlan,
+  onDiscuss,
+  onFilterChange,
+  onRegenerate,
+  onToggleExpanded,
+  openChapterId,
+  setOpenChapterId,
+  typedSummaries,
+}: {
+  allApproved: boolean;
+  busy: boolean;
+  canBuildPlan: boolean;
+  expanded: boolean;
+  filter: ReviewFilter;
+  items: ChapterReviewItem[];
+  onApprove: (chapterId: string) => void;
+  onApproveAll: () => void;
+  onBuildPlan: () => void;
+  onDiscuss: (chapterId: string) => void;
+  onFilterChange: (filter: ReviewFilter) => void;
+  onRegenerate: (chapterId: string) => void;
+  onToggleExpanded: () => void;
+  openChapterId: string | null;
+  setOpenChapterId: (chapterId: string | null) => void;
+  typedSummaries: Record<string, string>;
+}) {
+  const filtered = filterReviewItems(items, filter);
+  const visibleItems = expanded ? filtered : filtered.slice(0, 5);
+  const readyCount = items.filter((item) => item.review.status === "ready" || item.review.status === "approved").length;
+  const approvedCount = items.filter((item) => item.review.status === "approved").length;
+  return (
+    <div className="review-workbench">
+      <div className="review-toolbar">
+        <div>
+          <span>已读懂 {readyCount}/{items.length} 章</span>
+          <strong>已通过 {approvedCount}/{items.length} 章</strong>
+        </div>
+        <div className="segmented-control" role="group" aria-label="章节筛选">
+          <button className={filter === "all" ? "active" : ""} type="button" onClick={() => onFilterChange("all")}>
+            全部
+          </button>
+          <button className={filter === "pending" ? "active" : ""} type="button" onClick={() => onFilterChange("pending")}>
+            未通过
+          </button>
+          <button className={filter === "attention" ? "active" : ""} type="button" onClick={() => onFilterChange("attention")}>
+            需重读
+          </button>
+        </div>
+      </div>
+      <div className="review-actions">
+        <button type="button" disabled={!items.length || busy} onClick={onApproveAll}>
+          全部通过
+        </button>
+        <button type="button" disabled={!canBuildPlan || busy} onClick={onBuildPlan}>
+          生成 Story Bible 和改编计划
+        </button>
+        <button type="button" disabled={filtered.length <= 5} onClick={onToggleExpanded}>
+          {expanded ? "收起章节" : "展开全部"}
+        </button>
+      </div>
+      <div className="review-grid" data-testid="chapter-review-grid">
+        {visibleItems.map((item) => (
+          <ChapterReviewCard
+            item={item}
+            key={item.review.chapter_id}
+            onApprove={onApprove}
+            onDiscuss={onDiscuss}
+            onRegenerate={onRegenerate}
+            open={openChapterId === item.review.chapter_id}
+            setOpen={(nextOpen) => setOpenChapterId(nextOpen ? item.review.chapter_id : null)}
+            typedSummary={typedSummaries[item.review.chapter_id]}
+          />
+        ))}
+      </div>
+      {!allApproved ? (
+        <p className="review-hint">Story Bible 和改编计划只会基于已通过的章节理解卡生成。</p>
+      ) : (
+        <p className="review-hint success-text">所有章节已通过，可以进入改编计划。</p>
+      )}
+    </div>
+  );
+}
+
+function ChapterReviewCard({
+  item,
+  onApprove,
+  onDiscuss,
+  onRegenerate,
+  open,
+  setOpen,
+  typedSummary,
+}: {
+  item: ChapterReviewItem;
+  onApprove: (chapterId: string) => void;
+  onDiscuss: (chapterId: string) => void;
+  onRegenerate: (chapterId: string) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  typedSummary?: string;
+}) {
+  const card = item.card;
+  const chapterId = item.review.chapter_id;
+  return (
+    <article className={`review-card ${reviewStatusClass(item.review.status)}`}>
+      <div className="review-card-head">
+        <div>
+          <strong>
+            第 {item.chapter.index} 章 · {item.chapter.title}
+          </strong>
+          <span>{item.chapter.char_count} 字 · {reviewStatusLabel(item.review.status)}</span>
+        </div>
+        <span className="revision-pill">重读 {item.review.revision_count}</span>
+      </div>
+      {card ? (
+        <>
+          <p className="review-summary">{typedSummary ?? card.summary}</p>
+          <div className="review-tags">
+            {card.characters.slice(0, 4).map((character) => <span key={character}>{character}</span>)}
+          </div>
+          {open ? (
+            <div className="review-details">
+              <DetailList title="关键事件" items={card.key_events} />
+              <DetailList title="线索" items={card.clues} />
+              <DetailList title="改编机会" items={card.adaptation_opportunities} />
+              <DetailList title="连续性提示" items={card.continuity_notes} />
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p className="review-summary">这一章还在读取中，理解卡生成后会自动出现。</p>
+      )}
+      {item.review.error ? <p className="error-text">{item.review.error}</p> : null}
+      <div className="review-card-actions">
+        <button type="button" disabled={!card} onClick={() => setOpen(!open)}>
+          {open ? "收起详情" : "查看详情"}
+        </button>
+        <button type="button" disabled={!card} onClick={() => onDiscuss(chapterId)}>
+          讨论/修改理解
+        </button>
+        <button type="button" disabled={!card || item.review.status === "approved"} onClick={() => onApprove(chapterId)}>
+          通过
+        </button>
+        <button type="button" onClick={() => onRegenerate(chapterId)}>
+          重新理解
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function ChapterChatPanel({
+  assistantDraft,
+  busy,
+  chapterItem,
+  input,
+  messages,
+  onChangeInput,
+  onClose,
+  onRegenerate,
+  onSend,
+  toolEvents,
+  visibleThinking,
+}: {
+  assistantDraft: string;
+  busy: boolean;
+  chapterItem: ChapterReviewItem | null;
+  input: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  onChangeInput: (value: string) => void;
+  onClose: () => void;
+  onRegenerate: (chapterId: string) => void;
+  onSend: () => void;
+  toolEvents: string[];
+  visibleThinking: string;
+}) {
+  return (
+    <aside className="chapter-chat-panel" data-testid="chapter-chat-panel">
+      <div className="artifact-header">
+        <div>
+          <span>章节讨论</span>
+          <strong>{chapterItem?.chapter.title ?? "章节"}</strong>
+        </div>
+        <button type="button" onClick={onClose}>
+          关闭
+        </button>
+      </div>
+      <div className="chapter-chat-context">
+        {chapterItem?.card ? (
+          <>
+            <span>{chapterItem.review.chapter_id} · {chapterItem.chapter.char_count} 字</span>
+            <p>{chapterItem.card.summary}</p>
+            <button type="button" onClick={() => onRegenerate(chapterItem.review.chapter_id)}>
+              重新理解本章
+            </button>
+          </>
+        ) : (
+          <p>等待章节理解卡生成。</p>
+        )}
+      </div>
+      <div className="chapter-chat-messages" aria-label="章节聊天消息">
+        {messages.length ? messages.map((message, index) => (
+          <div className={`chapter-chat-message ${message.role}`} key={`${message.role}-${index}`}>
+            <span>{message.role === "assistant" ? "AI" : "你"}</span>
+            <p>{message.content}</p>
+          </div>
+        )) : (
+          <div className="hint-card">你可以告诉 AI：哪条线索没读准、哪个人物动机必须保留、哪些心理描写不要乱改。</div>
+        )}
+        {visibleThinking ? (
+          <div className="visible-thinking">
+            <span>思考摘要</span>
+            <p>{visibleThinking}</p>
+          </div>
+        ) : null}
+        {toolEvents.length ? (
+          <div className="tool-events">
+            {toolEvents.map((event, index) => <span key={`${event}-${index}`}>{event}</span>)}
+          </div>
+        ) : null}
+        {assistantDraft ? (
+          <div className="chapter-chat-message assistant streaming">
+            <span>AI</span>
+            <p>{assistantDraft}</p>
+          </div>
+        ) : null}
+      </div>
+      <div className="chapter-chat-input">
+        <textarea
+          value={input}
+          onChange={(event) => onChangeInput(event.target.value)}
+          placeholder="指出你不满意的地方，例如：第二章周砚的动机读偏了..."
+        />
+        <button type="button" disabled={busy || !input.trim()} onClick={onSend}>
+          发送
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function DetailList({ items, title }: { items: string[]; title: string }) {
+  return (
+    <div className="detail-list">
+      <span>{title}</span>
+      <ul>
+        {items.length ? items.map((item) => <li key={item}>{item}</li>) : <li>暂无</li>}
+      </ul>
     </div>
   );
 }
@@ -1182,6 +1838,15 @@ function getConversationPhase(
   if (yamlText && run.status === "succeeded") {
     return "completed";
   }
+  if (run.status === "awaiting_chapter_review" || run.status === "regenerating_chapter") {
+    return "reviewing";
+  }
+  if (run.status === "reading_chapters") {
+    return "analyzing";
+  }
+  if (run.status === "planning") {
+    return "analyzing";
+  }
   if (generationRequested || (isPolling && run.status !== "planned")) {
     return "generating";
   }
@@ -1195,6 +1860,7 @@ function phaseLabel(phase: ConversationPhase): string {
   const labels: Record<ConversationPhase, string> = {
     idle: "未开始",
     analyzing: "分析中",
+    reviewing: "等待章节确认",
     planned: "等待确认",
     generating: "生成中",
     completed: "已完成",
@@ -1207,6 +1873,7 @@ function activeStepIndex(phase: ConversationPhase): number {
   const indexes: Record<ConversationPhase, number> = {
     idle: 0,
     analyzing: 1,
+    reviewing: 1,
     planned: 2,
     generating: 3,
     completed: 4,
@@ -1225,4 +1892,82 @@ function panelTitle(panel: ArtifactPanel): string {
     details: "运行详情",
   };
   return labels[panel];
+}
+
+function filterReviewItems(items: ChapterReviewItem[], filter: ReviewFilter): ChapterReviewItem[] {
+  if (filter === "pending") {
+    return items.filter((item) => item.review.status !== "approved");
+  }
+  if (filter === "attention") {
+    return items.filter((item) => item.review.status === "failed" || item.review.revision_count > 0);
+  }
+  return items;
+}
+
+function reviewStatusLabel(status: ChapterReviewItem["review"]["status"]): string {
+  const labels: Record<ChapterReviewItem["review"]["status"], string> = {
+    pending: "排队中",
+    reading: "读取中",
+    ready: "待确认",
+    approved: "已通过",
+    regenerating: "重读中",
+    failed: "需处理",
+  };
+  return labels[status];
+}
+
+function reviewStatusClass(status: ChapterReviewItem["review"]["status"]): string {
+  if (status === "approved") {
+    return "approved";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  if (status === "reading" || status === "regenerating") {
+    return "running";
+  }
+  return "ready";
+}
+
+function runStatusLabel(status: RunInfo["status"]): string {
+  const labels: Partial<Record<RunInfo["status"], string>> = {
+    queued: "排队中",
+    running: "运行中",
+    reading_chapters: "读章节",
+    awaiting_chapter_review: "待确认",
+    regenerating_chapter: "重读中",
+    planning: "做计划",
+    planned: "待生成",
+    generating: "生成中",
+    validating: "校验中",
+    repairing: "修复中",
+    exporting: "导出中",
+    succeeded: "完成",
+    failed_validation: "校验失败",
+    failed_llm: "模型失败",
+    failed_internal: "系统失败",
+  };
+  return labels[status] ?? status;
+}
+
+function formatTaskTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "刚刚";
+  }
+  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function parseSsePayload(eventText: string): Record<string, unknown> | null {
+  const dataLine = eventText
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("data: "));
+  if (!dataLine) {
+    return null;
+  }
+  try {
+    return JSON.parse(dataLine.slice(6));
+  } catch {
+    return null;
+  }
 }

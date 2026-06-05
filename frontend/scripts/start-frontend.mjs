@@ -5,22 +5,15 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, "..", "..");
-const backendDir = path.join(repoRoot, "backend");
-const pythonPath =
-  process.platform === "win32"
-    ? path.join(backendDir, ".venv", "Scripts", "python.exe")
-    : path.join(backendDir, ".venv", "bin", "python");
+const frontendDir = path.resolve(__dirname, "..");
+const nextBin = path.join(frontendDir, "node_modules", "next", "dist", "bin", "next");
 
 const child = spawn(
-  pythonPath,
-  ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
+  process.execPath,
+  [nextBin, "dev", "--webpack", "--hostname", "127.0.0.1", "--port", "3000"],
   {
-    cwd: backendDir,
-    env: {
-      ...process.env,
-      USE_MOCK_LLM: process.env.USE_MOCK_LLM ?? "true",
-    },
+    cwd: frontendDir,
+    env: process.env,
     stdio: "inherit",
   },
 );
@@ -45,7 +38,7 @@ function shutdown(signal) {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-child.on("exit", (code, signal) => {
+child.on("exit", (code) => {
   shuttingDown = true;
   process.exit(code ?? 0);
 });

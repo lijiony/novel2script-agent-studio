@@ -70,7 +70,15 @@ def test_mock_workflow_supports_plan_then_generate(tmp_path):
     manifest = store.create_run(sample)
     workflow = AdaptationWorkflow(settings, store)
 
-    workflow.plan(manifest.run_id)
+    workflow.intake(manifest.run_id)
+
+    review_manifest = store.read_manifest(manifest.run_id)
+    assert review_manifest.status == RunStatus.awaiting_chapter_review
+    reviews = store.read_json(manifest.run_id, "chapter_reviews.json")
+    assert all(review["status"] == "ready" for review in reviews)
+
+    workflow.approve_all_chapters(manifest.run_id)
+    workflow.build_plan(manifest.run_id)
 
     planned_manifest = store.read_manifest(manifest.run_id)
     assert planned_manifest.status == RunStatus.planned
@@ -110,7 +118,9 @@ def test_mock_workflow_handles_many_chapters_without_chunking(tmp_path):
     manifest = store.create_run(sample)
     workflow = AdaptationWorkflow(settings, store)
 
-    workflow.plan(manifest.run_id)
+    workflow.intake(manifest.run_id)
+    workflow.approve_all_chapters(manifest.run_id)
+    workflow.build_plan(manifest.run_id)
 
     planned_manifest = store.read_manifest(manifest.run_id)
     chapter_cards = store.read_json(manifest.run_id, "chapter_cards.json")
@@ -123,6 +133,33 @@ def test_mock_workflow_handles_many_chapters_without_chunking(tmp_path):
     assert plan.recommended_generation_scope == [1, 2, 3]
     assert plan.technical_notes
     assert plan.scene_plan[0].adaptation_reason
+
+
+def test_regenerate_chapter_only_updates_target_card(tmp_path):
+    sample = """第一章 开始
+林夏收到第一封信。
+
+第二章 剧院
+林夏遇到周砚。
+
+第三章 台词
+林夏找到地址。
+"""
+    settings = Settings(USE_MOCK_LLM=True, RUNS_DIR=tmp_path)
+    store = RunStore(tmp_path)
+    manifest = store.create_run(sample)
+    workflow = AdaptationWorkflow(settings, store)
+
+    workflow.intake(manifest.run_id)
+    before = store.read_json(manifest.run_id, "chapter_cards.json")
+    workflow.regenerate_chapter(manifest.run_id, "ch_002")
+    after = store.read_json(manifest.run_id, "chapter_cards.json")
+    reviews = store.read_json(manifest.run_id, "chapter_reviews.json")
+
+    assert before[0] == after[0]
+    assert before[2] == after[2]
+    assert reviews[1]["revision_count"] == 1
+    assert reviews[1]["status"] == "ready"
 
 
 def test_workflow_falls_back_to_mock_without_api_key(tmp_path):
@@ -167,7 +204,7 @@ def test_real_llm_error_is_reported_as_failed_llm(tmp_path):
 
     workflow.llm.generate_json = fail_generate_json  # type: ignore[method-assign]
 
-    workflow.plan(manifest.run_id)
+    workflow.intake(manifest.run_id)
 
     final_manifest = store.read_manifest(manifest.run_id)
     assert final_manifest.status == RunStatus.failed_llm

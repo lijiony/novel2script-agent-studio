@@ -1,4 +1,5 @@
 from typing import Any
+from uuid import uuid4
 from langgraph.graph import END, StateGraph
 
 from app.core.config import Settings
@@ -9,6 +10,8 @@ from app.domain.schemas import (
     AuthorControls,
     Chapter,
     ChapterCard,
+    ChapterChatMessage,
+    ChapterReview,
     PlannerOutput,
     ReaderOutput,
     RunStatus,
@@ -18,6 +21,7 @@ from app.domain.schemas import (
     StoryBible,
     StoryBibleChapter,
     ValidationReport,
+    now_iso,
     script_json_schema,
 )
 from app.domain.validators import validate_script_payload
@@ -41,18 +45,43 @@ class AdaptationWorkflow:
         self.settings = settings
         self.store = store
         self.llm = LlmClient(settings)
+        self.intake_graph = self._build_intake_graph()
         self.plan_graph = self._build_plan_graph()
         self.generate_graph = self._build_generate_graph()
 
     def run(self, run_id: str) -> None:
-        self.plan(run_id)
+        self.intake(run_id)
+        if self.store.read_manifest(run_id).status == RunStatus.awaiting_chapter_review:
+            self.approve_all_chapters(run_id)
+            self.build_plan(run_id)
         if self.store.read_manifest(run_id).status == RunStatus.planned:
             self.generate(run_id, AuthorControls())
 
-    def plan(self, run_id: str) -> None:
+    def intake(self, run_id: str) -> None:
         try:
             input_text = self.store.read_input(run_id)
-            self.plan_graph.invoke({"run_id": run_id, "input_text": input_text})
+            self.intake_graph.invoke({"run_id": run_id, "input_text": input_text})
+            self.store.set_stage(
+                run_id,
+                "awaiting_chapter_review",
+                "succeeded",
+                message="Chapter cards are ready for author review.",
+                run_status=RunStatus.awaiting_chapter_review,
+            )
+        except (ChapterParseError, WorkflowValidationError) as exc:
+            self.store.fail(run_id, RunStatus.failed_validation, str(exc))
+        except LlmWorkflowError as exc:
+            self.store.fail(run_id, RunStatus.failed_llm, str(exc))
+        except Exception as exc:  # pragma: no cover - integration guard
+            self.store.fail(run_id, RunStatus.failed_internal, str(exc))
+
+    def plan(self, run_id: str) -> None:
+        self.build_plan(run_id)
+
+    def build_plan(self, run_id: str, *, require_approved: bool = True) -> None:
+        try:
+            state = self._load_planning_state(run_id, require_approved=require_approved)
+            self.plan_graph.invoke(state)
             self.store.planned(run_id)
         except (ChapterParseError, WorkflowValidationError) as exc:
             self.store.fail(run_id, RunStatus.failed_validation, str(exc))
@@ -60,6 +89,146 @@ class AdaptationWorkflow:
             self.store.fail(run_id, RunStatus.failed_llm, str(exc))
         except Exception as exc:  # pragma: no cover - integration guard
             self.store.fail(run_id, RunStatus.failed_internal, str(exc))
+
+    def approve_chapter(self, run_id: str, chapter_id: str) -> None:
+        reviews = self._read_reviews(run_id)
+        cards = [
+            ChapterCard.model_validate(item)
+            for item in self.store.read_json(run_id, "chapter_cards.json")
+        ]
+        if chapter_id not in {card.chapter_id for card in cards}:
+            raise WorkflowValidationError("Chapter card is not ready for approval.")
+        reviews = [
+            review.model_copy(
+                update={
+                    "status": "approved",
+                    "approved_at": now_iso(),
+                    "error": None,
+                }
+            )
+            if review.chapter_id == chapter_id
+            else review
+            for review in reviews
+        ]
+        self._write_reviews(run_id, reviews)
+        self.store.set_status(run_id, RunStatus.awaiting_chapter_review)
+
+    def approve_all_chapters(self, run_id: str) -> None:
+        reviews = self._read_reviews(run_id)
+        cards = [
+            ChapterCard.model_validate(item)
+            for item in self.store.read_json(run_id, "chapter_cards.json")
+        ]
+        ready_ids = {card.chapter_id for card in cards}
+        reviews = [
+            review.model_copy(
+                update={
+                    "status": "approved",
+                    "approved_at": review.approved_at or now_iso(),
+                    "error": None,
+                }
+            )
+            if review.chapter_id in ready_ids
+            else review
+            for review in reviews
+        ]
+        self._write_reviews(run_id, reviews)
+        self.store.set_status(run_id, RunStatus.awaiting_chapter_review)
+
+    def regenerate_chapter(self, run_id: str, chapter_id: str) -> None:
+        try:
+            chapters = [
+                Chapter.model_validate(item)
+                for item in self.store.read_json(run_id, "chapters.json")
+            ]
+            chapter = next(
+                (item for item in chapters if f"ch_{item.index:03d}" == chapter_id),
+                None,
+            )
+            if chapter is None:
+                raise WorkflowValidationError("Chapter not found.")
+            reviews = self._read_reviews(run_id)
+            reviews = [
+                review.model_copy(
+                    update={"status": "regenerating", "approved_at": None, "error": None}
+                )
+                if review.chapter_id == chapter_id
+                else review
+                for review in reviews
+            ]
+            self._write_reviews(run_id, reviews)
+            self.store.set_stage(
+                run_id,
+                "regenerate_chapter",
+                "running",
+                message=f"Regenerating {chapter_id}.",
+                run_status=RunStatus.regenerating_chapter,
+            )
+            raw_card = (
+                self._mock_chapter_cards([chapter])[0]
+                if self.llm.mock
+                else self._remote_chapter_card(chapter)
+            )
+            new_card = ChapterCard.model_validate(raw_card).model_dump(mode="json")
+            current_cards = [
+                ChapterCard.model_validate(item).model_dump(mode="json")
+                for item in self.store.read_json(run_id, "chapter_cards.json")
+            ]
+            replaced = False
+            next_cards = []
+            for card in current_cards:
+                if card["chapter_id"] == chapter_id:
+                    next_cards.append(new_card)
+                    replaced = True
+                else:
+                    next_cards.append(card)
+            if not replaced:
+                next_cards.append(new_card)
+            next_cards.sort(key=lambda item: item["chapter_index"])
+            self.store.write_json(run_id, "chapter_cards.json", next_cards)
+            reviews = [
+                review.model_copy(
+                    update={
+                        "status": "ready",
+                        "approved_at": None,
+                        "error": None,
+                        "revision_count": review.revision_count + 1,
+                    }
+                )
+                if review.chapter_id == chapter_id
+                else review
+                for review in reviews
+            ]
+            self._write_reviews(run_id, reviews)
+            self.store.remove_artifacts(
+                run_id,
+                [
+                    "reader_output.json",
+                    "story_bible.json",
+                    "story_bible.md",
+                    "planner_output.json",
+                    "adaptation_plan.json",
+                    "adaptation_plan.md",
+                    "author_controls.json",
+                    "script.json",
+                    "script.yaml",
+                    "schema.json",
+                    "schema.md",
+                    "adaptation_report.md",
+                    "report.json",
+                ],
+            )
+            self.store.set_stage(
+                run_id,
+                "regenerate_chapter",
+                "succeeded",
+                message=f"{chapter_id} regenerated.",
+                run_status=RunStatus.awaiting_chapter_review,
+            )
+        except (WorkflowValidationError, LlmWorkflowError):
+            raise
+        except Exception as exc:
+            raise WorkflowValidationError(str(exc)) from exc
 
     def generate(self, run_id: str, controls: AuthorControls | dict[str, Any] | None = None) -> None:
         try:
@@ -70,7 +239,7 @@ class AdaptationWorkflow:
                 "await_author_controls",
                 "succeeded",
                 message="Author controls accepted.",
-                run_status=RunStatus.running,
+                run_status=RunStatus.generating,
             )
             state = self._load_generation_state(run_id, author_controls)
             self.generate_graph.invoke(state)
@@ -82,18 +251,24 @@ class AdaptationWorkflow:
         except Exception as exc:  # pragma: no cover - integration guard
             self.store.fail(run_id, RunStatus.failed_internal, str(exc))
 
-    def _build_plan_graph(self):
+    def _build_intake_graph(self):
         builder = StateGraph(WorkflowState)
         builder.add_node("validate_input", self._validate_input)
         builder.add_node("parse_chapters", self._parse_chapters)
         builder.add_node("read_chapters_individually", self._read_chapters_individually)
-        builder.add_node("build_story_bible", self._build_story_bible)
-        builder.add_node("plan_adaptation", self._plan_adaptation)
 
         builder.set_entry_point("validate_input")
         builder.add_edge("validate_input", "parse_chapters")
         builder.add_edge("parse_chapters", "read_chapters_individually")
-        builder.add_edge("read_chapters_individually", "build_story_bible")
+        builder.add_edge("read_chapters_individually", END)
+        return builder.compile()
+
+    def _build_plan_graph(self):
+        builder = StateGraph(WorkflowState)
+        builder.add_node("build_story_bible", self._build_story_bible)
+        builder.add_node("plan_adaptation", self._plan_adaptation)
+
+        builder.set_entry_point("build_story_bible")
         builder.add_edge("build_story_bible", "plan_adaptation")
         builder.add_edge("plan_adaptation", END)
         return builder.compile()
@@ -146,6 +321,83 @@ class AdaptationWorkflow:
             "author_controls": author_controls.model_dump(mode="json"),
         }
 
+    def _load_planning_state(
+        self, run_id: str, *, require_approved: bool
+    ) -> WorkflowState:
+        chapters_payload = self.store.read_json(run_id, "chapters.json")
+        chapter_cards_payload = self.store.read_json(run_id, "chapter_cards.json")
+        reviews = [
+            ChapterReview.model_validate(item)
+            for item in self.store.read_json(run_id, "chapter_reviews.json")
+        ]
+        cards_by_id = {
+            ChapterCard.model_validate(item).chapter_id: item
+            for item in chapter_cards_payload
+        }
+        if require_approved:
+            not_ready = [
+                review.chapter_id
+                for review in reviews
+                if review.status != "approved" or review.chapter_id not in cards_by_id
+            ]
+            if not_ready:
+                raise WorkflowValidationError(
+                    "All chapter cards must be approved before building the adaptation plan."
+                )
+        approved_ids = {
+            review.chapter_id
+            for review in reviews
+            if review.status == "approved" and review.chapter_id in cards_by_id
+        }
+        if not approved_ids:
+            approved_ids = set(cards_by_id)
+        approved_cards = [
+            card
+            for card in chapter_cards_payload
+            if ChapterCard.model_validate(card).chapter_id in approved_ids
+        ]
+        if len(approved_cards) < 3:
+            raise WorkflowValidationError(
+                "At least 3 approved chapter cards are required to build the adaptation plan."
+            )
+        reader_output = self._reader_output_from_chapter_cards(approved_cards)
+        self.store.write_json(run_id, "reader_output.json", reader_output)
+        return {
+            "run_id": run_id,
+            "chapters": chapters_payload,  # type: ignore[typeddict-item]
+            "chapter_cards": approved_cards,  # type: ignore[typeddict-item]
+            "reader_output": reader_output,  # type: ignore[typeddict-item]
+        }
+
+    def _read_reviews(self, run_id: str) -> list[ChapterReview]:
+        return [
+            ChapterReview.model_validate(item)
+            for item in self.store.read_json(run_id, "chapter_reviews.json")
+        ]
+
+    def _write_reviews(self, run_id: str, reviews: list[ChapterReview]) -> None:
+        self.store.write_json(
+            run_id,
+            "chapter_reviews.json",
+            [review.model_dump(mode="json") for review in reviews],
+        )
+
+    def _append_workflow_event(
+        self, run_id: str, event_type: str, payload: dict[str, Any]
+    ) -> None:
+        try:
+            events = list(self.store.read_json(run_id, "workflow_events.json"))
+        except Exception:
+            events = []
+        events.append(
+            {
+                "type": event_type,
+                "payload": payload,
+                "created_at": now_iso(),
+            }
+        )
+        self.store.write_json(run_id, "workflow_events.json", events)
+
     def _start_stage(
         self, state: WorkflowState, name: str, run_status: RunStatus = RunStatus.running
     ) -> None:
@@ -166,22 +418,70 @@ class AdaptationWorkflow:
         chapters = parse_chapters(state["input_text"], max_chars=self.settings.max_input_chars)
         chapter_payloads = [chapter.model_dump() for chapter in chapters]
         self.store.write_json(state["run_id"], "chapters.json", chapter_payloads)
+        reviews = [
+            ChapterReview(chapter_id=f"ch_{chapter.index:03d}")
+            for chapter in chapters
+        ]
+        self._write_reviews(state["run_id"], reviews)
+        self.store.write_json(state["run_id"], "workflow_events.json", [])
         self._finish_stage(state, "parse_chapters", f"Detected {len(chapters)} chapters.")
         return {**state, "chapters": chapter_payloads}
 
     def _read_chapters_individually(self, state: WorkflowState) -> WorkflowState:
-        self._start_stage(state, "read_chapters_individually")
+        self._start_stage(
+            state,
+            "read_chapters_individually",
+            RunStatus.reading_chapters,
+        )
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
-        if self.llm.mock:
-            raw_cards = self._mock_chapter_cards(chapters)
-        else:
-            raw_cards = [self._remote_chapter_card(chapter) for chapter in chapters]
-        chapter_cards = [
-            ChapterCard.model_validate(item).model_dump(mode="json") for item in raw_cards
-        ]
+        reviews = self._read_reviews(state["run_id"])
+        cards_by_id: dict[str, dict[str, Any]] = {}
+        for chapter in chapters:
+            chapter_id = f"ch_{chapter.index:03d}"
+            reviews = [
+                review.model_copy(update={"status": "reading", "error": None})
+                if review.chapter_id == chapter_id
+                else review
+                for review in reviews
+            ]
+            self._write_reviews(state["run_id"], reviews)
+            try:
+                raw_card = (
+                    self._mock_chapter_cards([chapter])[0]
+                    if self.llm.mock
+                    else self._remote_chapter_card(chapter)
+                )
+                card = ChapterCard.model_validate(raw_card).model_dump(mode="json")
+                cards_by_id[chapter_id] = card
+                reviews = [
+                    review.model_copy(update={"status": "ready", "error": None})
+                    if review.chapter_id == chapter_id
+                    else review
+                    for review in reviews
+                ]
+                self.store.write_json(
+                    state["run_id"],
+                    "chapter_cards.json",
+                    list(cards_by_id.values()),
+                )
+                self._append_workflow_event(
+                    state["run_id"],
+                    "chapter_card_ready",
+                    {"chapter_id": chapter_id},
+                )
+            except Exception as exc:
+                reviews = [
+                    review.model_copy(update={"status": "failed", "error": str(exc)})
+                    if review.chapter_id == chapter_id
+                    else review
+                    for review in reviews
+                ]
+                self._write_reviews(state["run_id"], reviews)
+                raise
+            self._write_reviews(state["run_id"], reviews)
+        chapter_cards = list(cards_by_id.values())
         reader_output = self._reader_output_from_chapter_cards(chapter_cards)
         self.store.write_json(state["run_id"], "chapter_cards.json", chapter_cards)
-        self.store.write_json(state["run_id"], "reader_output.json", reader_output)
         self._finish_stage(
             state,
             "read_chapters_individually",
@@ -190,7 +490,7 @@ class AdaptationWorkflow:
         return {**state, "chapter_cards": chapter_cards, "reader_output": reader_output}
 
     def _build_story_bible(self, state: WorkflowState) -> WorkflowState:
-        self._start_stage(state, "build_story_bible")
+        self._start_stage(state, "build_story_bible", RunStatus.planning)
         chapter_cards = [
             ChapterCard.model_validate(item) for item in state["chapter_cards"]
         ]
@@ -221,7 +521,7 @@ class AdaptationWorkflow:
         return {**state, "reader_output": reader_output}
 
     def _plan_adaptation(self, state: WorkflowState) -> WorkflowState:
-        self._start_stage(state, "plan_adaptation")
+        self._start_stage(state, "plan_adaptation", RunStatus.planning)
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
         chapter_cards = [
             ChapterCard.model_validate(item) for item in state["chapter_cards"]
