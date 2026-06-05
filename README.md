@@ -132,6 +132,12 @@ Submission readiness precheck:
 .\scripts\check-submission-ready.ps1 -AllowMissingDemo
 ```
 
+When checking an open PR branch before merge:
+
+```powershell
+.\scripts\check-submission-ready.ps1 -AllowMissingDemo -AllowNonMain
+```
+
 After uploading the narrated video, update the placeholders with:
 
 ```powershell

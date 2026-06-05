@@ -1,5 +1,6 @@
 param(
-    [switch]$AllowMissingDemo
+    [switch]$AllowMissingDemo,
+    [switch]$AllowNonMain
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +29,15 @@ try {
     Assert-Ok ($remote -match "lijiony/novel2script-agent-studio") "Origin points to the submission repository."
 
     $branch = git branch --show-current
-    Assert-Ok ($branch -eq "main") "Current branch is main."
+    if ($branch -eq "main") {
+        Write-Host "[OK] Current branch is main."
+    }
+    elseif ($AllowNonMain) {
+        Write-Host "[WARN] Current branch is $branch. Merge into main before final submission."
+    }
+    else {
+        throw "Current branch is $branch. Run from main before final submission, or pass -AllowNonMain for PR branch prechecks."
+    }
 
     $commitTimes = git log --format=%cI
     foreach ($commitTime in $commitTimes) {
