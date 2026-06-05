@@ -60,7 +60,7 @@ export function YamlEditor({ value, schema, onChange }: Props) {
   return (
     <div className="editor-wrap">
       <Editor
-        height="520px"
+        height="100%"
         defaultLanguage="yaml"
         path="script.yaml"
         value={value}

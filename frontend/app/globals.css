@@ -170,7 +170,8 @@ a {
 }
 
 .editor-wrap {
-  min-height: 520px;
+  height: min(520px, 62vh);
+  min-height: 360px;
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
@@ -178,7 +179,8 @@ a {
 
 .fallback-editor {
   width: 100%;
-  min-height: 520px;
+  min-height: 360px;
+  height: min(520px, 62vh);
   resize: vertical;
   border: 0;
   padding: 12px;
@@ -232,5 +234,29 @@ a {
 @media (max-width: 1100px) {
   .main {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 14px;
+  }
+
+  .brand h1 {
+    font-size: 20px;
+  }
+
+  .main {
+    padding: 12px;
+  }
+
+  .panel-body {
+    padding: 10px;
+  }
+
+  .input-area {
+    min-height: 300px;
   }
 }
