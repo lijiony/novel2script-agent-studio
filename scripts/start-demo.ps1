@@ -3,7 +3,8 @@ param(
     [int]$FrontendPort = 3000,
     [ValidateSet("production", "dev")]
     [string]$FrontendMode = "production",
-    [switch]$UseRealLlm
+    [switch]$UseRealLlm,
+    [switch]$InstallDeps
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,17 +42,70 @@ function Test-Port([int]$Port) {
     }
 }
 
-Assert-CommandExists "uv"
+Assert-CommandExists "python"
 Assert-CommandExists "npm"
 Assert-CommandExists "npx"
 
+function Test-CommandUsable {
+    param([string]$Command)
+
+    try {
+        & $Command "--version" *> $null
+        return $LASTEXITCODE -eq 0
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-VenvPipUsable {
+    try {
+        & ".venv\Scripts\python" "-m" "pip" "--version" *> $null
+        return $LASTEXITCODE -eq 0
+    }
+    catch {
+        return $false
+    }
+}
+
+function Ensure-VenvPip {
+    if (Test-VenvPipUsable) {
+        return $true
+    }
+    try {
+        & ".venv\Scripts\python" "-m" "ensurepip" "--upgrade" *> $null
+        return (Test-VenvPipUsable)
+    }
+    catch {
+        return $false
+    }
+}
+
+$BackendVenvCreated = $false
 if (-not (Test-Path (Join-Path $BackendDir ".venv"))) {
     Push-Location $BackendDir
-    Invoke-Checked "uv" @("venv")
+    if (Test-CommandUsable "uv") {
+        Invoke-Checked "uv" @("venv")
+    }
+    else {
+        Invoke-Checked "python" @("-m", "venv", ".venv")
+    }
+    $BackendVenvCreated = $true
     Pop-Location
 }
 Push-Location $BackendDir
-Invoke-Checked "uv" @("pip", "install", "-e", ".[dev]")
+if (-not $BackendVenvCreated -and -not $InstallDeps) {
+    Write-Host "Using existing backend .venv; dependency install skipped."
+}
+elseif (Test-CommandUsable "uv") {
+    Invoke-Checked "uv" @("pip", "install", "-e", ".[dev]")
+}
+elseif (Ensure-VenvPip) {
+    Invoke-Checked ".venv\Scripts\python" @("-m", "pip", "install", "-e", ".[dev]")
+}
+else {
+    Write-Warning "pip is unavailable in .venv; skipping dependency install and using existing environment."
+}
 Pop-Location
 
 if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {

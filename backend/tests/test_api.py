@@ -120,19 +120,23 @@ def test_compat_run_rejects_less_than_three_chapters(tmp_path):
         app.dependency_overrides.clear()
 
 
-def test_intake_generates_adaptation_plan(tmp_path):
+def test_intake_generates_chapter_reviews_without_plan(tmp_path):
     client, store = _client_with_store(tmp_path)
     try:
         response = client.post("/api/runs/intake", data={"text": SAMPLE_TEXT})
         assert response.status_code == 200
         run_id = response.json()["run_id"]
         manifest = store.read_manifest(run_id)
-        assert manifest.status == RunStatus.planned
+        assert manifest.status == RunStatus.awaiting_chapter_review
         assert "chapter_cards.json" in manifest.artifacts
-        assert "story_bible.json" in manifest.artifacts
-        assert "story_bible.md" in manifest.artifacts
-        assert "adaptation_plan.json" in manifest.artifacts
-        assert "adaptation_plan.md" in manifest.artifacts
+        assert "chapter_reviews.json" in manifest.artifacts
+        assert "adaptation_plan.json" not in manifest.artifacts
+
+        reviews = client.get(f"/api/runs/{run_id}/chapter-reviews")
+        assert reviews.status_code == 200
+        payload = reviews.json()
+        assert len(payload["items"]) == 3
+        assert payload["items"][0]["review"]["status"] == "ready"
     finally:
         app.dependency_overrides.clear()
 
@@ -156,6 +160,20 @@ def test_generate_uses_author_controls_after_intake(tmp_path):
         intake = client.post("/api/runs/intake", data={"text": SAMPLE_TEXT})
         run_id = intake.json()["run_id"]
 
+        blocked = client.post(f"/api/runs/{run_id}/build-plan")
+        assert blocked.status_code == 409
+
+        approve = client.post(f"/api/runs/{run_id}/chapter-cards/approve-all")
+        assert approve.status_code == 200
+        assert all(
+            item["review"]["status"] == "approved"
+            for item in approve.json()["items"]
+        )
+
+        build = client.post(f"/api/runs/{run_id}/build-plan")
+        assert build.status_code == 200
+        assert store.read_manifest(run_id).status == RunStatus.planned
+
         response = client.post(
             f"/api/runs/{run_id}/generate",
             json={
@@ -176,5 +194,39 @@ def test_generate_uses_author_controls_after_intake(tmp_path):
         assert manifest.status == RunStatus.succeeded
         assert script["adaptation_profile"]["adaptation_scale"] == "faithful"
         assert "script.yaml" in manifest.artifacts
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_run_list_and_chapter_regenerate_and_chat_stream(tmp_path):
+    client, store = _client_with_store(tmp_path)
+    try:
+        intake = client.post("/api/runs/intake", data={"text": SAMPLE_TEXT})
+        run_id = intake.json()["run_id"]
+
+        runs = client.get("/api/runs")
+        assert runs.status_code == 200
+        assert runs.json()["runs"][0]["run_id"] == run_id
+
+        before = store.read_json(run_id, "chapter_reviews.json")
+        regenerate = client.post(f"/api/runs/{run_id}/chapter-cards/ch_001/regenerate")
+        assert regenerate.status_code == 200
+        after = store.read_json(run_id, "chapter_reviews.json")
+        assert before[0]["revision_count"] == 0
+        assert after[0]["revision_count"] == 1
+        assert after[0]["status"] == "ready"
+
+        stream = client.post(
+            f"/api/runs/{run_id}/chapter-cards/ch_001/chat/stream",
+            json={"message": "这章我觉得读偏了"},
+        )
+        assert stream.status_code == 200
+        body = stream.text
+        assert "visible_thinking" in body
+        assert "tool_event" in body
+        assert "assistant_delta" in body
+        assert "sk-" not in body
+        messages = store.read_json(run_id, "chapter_chat_messages.json")
+        assert len(messages) >= 2
     finally:
         app.dependency_overrides.clear()

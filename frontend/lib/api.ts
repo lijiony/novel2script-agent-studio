@@ -12,7 +12,12 @@ export type RunStage = {
 export type RunStatus =
   | "queued"
   | "running"
+  | "reading_chapters"
+  | "awaiting_chapter_review"
+  | "regenerating_chapter"
+  | "planning"
   | "planned"
+  | "generating"
   | "validating"
   | "repairing"
   | "exporting"
@@ -28,6 +33,16 @@ export type RunInfo = {
   stages: RunStage[];
   artifacts: string[];
   error?: string | null;
+};
+
+export type RunListItem = {
+  run_id: string;
+  title: string;
+  status: RunStatus;
+  current_stage: string | null;
+  artifacts: string[];
+  created_at: string;
+  updated_at: string;
 };
 
 export type ValidationIssue = {
@@ -83,6 +98,58 @@ export type LlmTestResult = LlmStatus & {
   message: string;
 };
 
+export type ChapterCard = {
+  chapter_id: string;
+  chapter_index: number;
+  title: string;
+  char_count: number;
+  summary: string;
+  key_events: string[];
+  characters: string[];
+  locations: string[];
+  conflicts: string[];
+  emotional_beats: string[];
+  clues: string[];
+  adaptation_opportunities: string[];
+  continuity_notes: string[];
+};
+
+export type ChapterReview = {
+  chapter_id: string;
+  status: "pending" | "reading" | "ready" | "approved" | "regenerating" | "failed";
+  approved_at?: string | null;
+  error?: string | null;
+  revision_count: number;
+};
+
+export type ChapterReviewItem = {
+  chapter: {
+    index: number;
+    title: string;
+    text: string;
+    char_count: number;
+  };
+  card: ChapterCard | null;
+  review: ChapterReview;
+};
+
+export type ChapterReviewsResponse = {
+  run_id: string;
+  items: ChapterReviewItem[];
+};
+
+export type ChapterChatMessage = {
+  id: string;
+  chapter_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: string;
+};
+
+export type ChapterChatMessagesResponse = {
+  messages: ChapterChatMessage[];
+};
+
 export async function createRun(text: string, file?: File | null): Promise<RunInfo> {
   const form = new FormData();
   if (file) {
@@ -99,6 +166,15 @@ export async function createRun(text: string, file?: File | null): Promise<RunIn
   }
   const result = await response.json();
   return getRun(result.run_id);
+}
+
+export async function listRuns(): Promise<RunListItem[]> {
+  const response = await fetch(`${API_BASE_URL}/api/runs`);
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  const result = await response.json();
+  return result.runs;
 }
 
 export async function intakeRun(text: string, file?: File | null): Promise<RunInfo> {
@@ -135,6 +211,66 @@ export async function generateRun(
   }
   const result = await response.json();
   return getRun(result.run_id);
+}
+
+export async function buildPlan(runId: string): Promise<RunInfo> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/build-plan`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  const result = await response.json();
+  return getRun(result.run_id);
+}
+
+export async function getChapterReviews(runId: string): Promise<ChapterReviewsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-reviews`);
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function approveChapter(runId: string, chapterId: string): Promise<ChapterReviewsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/${chapterId}/approve`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function approveAllChapters(runId: string): Promise<ChapterReviewsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/approve-all`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function regenerateChapter(runId: string, chapterId: string): Promise<ChapterReviewsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/${chapterId}/regenerate`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function getChapterChatMessages(
+  runId: string,
+  chapterId: string,
+): Promise<ChapterChatMessagesResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/${chapterId}/chat/messages`);
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
 }
 
 export async function getRun(runId: string): Promise<RunInfo> {

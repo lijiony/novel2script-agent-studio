@@ -184,6 +184,55 @@ class ChapterCard(StrictBaseModel):
         return self
 
 
+class ChapterReview(StrictBaseModel):
+    chapter_id: str = Field(..., pattern=r"^ch_[0-9]{3}$")
+    status: Literal["pending", "reading", "ready", "approved", "regenerating", "failed"] = "pending"
+    approved_at: str | None = None
+    error: str | None = None
+    revision_count: int = Field(default=0, ge=0)
+
+
+class ChapterReviewItem(StrictBaseModel):
+    chapter: Chapter
+    card: ChapterCard | None = None
+    review: ChapterReview
+
+
+class ChapterReviewsResponse(StrictBaseModel):
+    run_id: str
+    items: list[ChapterReviewItem]
+
+
+class RunListItem(StrictBaseModel):
+    run_id: str
+    title: str
+    status: str
+    current_stage: str | None = None
+    artifacts: list[str] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class RunListResponse(StrictBaseModel):
+    runs: list[RunListItem]
+
+
+class ChapterChatRequest(StrictBaseModel):
+    message: str = Field(..., min_length=1)
+
+
+class ChapterChatMessage(StrictBaseModel):
+    id: str
+    chapter_id: str
+    role: Literal["user", "assistant", "system"]
+    content: str
+    created_at: str
+
+
+class ChapterChatMessagesResponse(StrictBaseModel):
+    messages: list[ChapterChatMessage]
+
+
 class StoryBibleChapter(StrictBaseModel):
     chapter_id: str = Field(..., pattern=r"^ch_[0-9]{3}$")
     title: str = Field(..., min_length=1)
@@ -281,7 +330,12 @@ class ValidationReport(StrictBaseModel):
 class RunStatus(str, Enum):
     queued = "queued"
     running = "running"
+    reading_chapters = "reading_chapters"
+    awaiting_chapter_review = "awaiting_chapter_review"
+    regenerating_chapter = "regenerating_chapter"
+    planning = "planning"
     planned = "planned"
+    generating = "generating"
     validating = "validating"
     repairing = "repairing"
     exporting = "exporting"
