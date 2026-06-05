@@ -4,6 +4,9 @@ from langgraph.graph import END, StateGraph
 from app.core.config import Settings
 from app.domain.chapter_parser import ChapterParseError, parse_chapters
 from app.domain.schemas import (
+    AdaptationPlan,
+    AdaptationRisk,
+    AuthorControls,
     Chapter,
     PlannerOutput,
     ReaderOutput,
@@ -30,35 +33,66 @@ class AdaptationWorkflow:
         self.settings = settings
         self.store = store
         self.llm = LlmClient(settings)
-        self.graph = self._build_graph()
+        self.plan_graph = self._build_plan_graph()
+        self.generate_graph = self._build_generate_graph()
 
     def run(self, run_id: str) -> None:
+        self.plan(run_id)
+        if self.store.read_manifest(run_id).status == RunStatus.planned:
+            self.generate(run_id, AuthorControls())
+
+    def plan(self, run_id: str) -> None:
         try:
             input_text = self.store.read_input(run_id)
-            self.graph.invoke({"run_id": run_id, "input_text": input_text})
+            self.plan_graph.invoke({"run_id": run_id, "input_text": input_text})
+            self.store.planned(run_id)
+        except (ChapterParseError, WorkflowValidationError) as exc:
+            self.store.fail(run_id, RunStatus.failed_validation, str(exc))
+        except Exception as exc:  # pragma: no cover - integration guard
+            self.store.fail(run_id, RunStatus.failed_internal, str(exc))
+
+    def generate(self, run_id: str, controls: AuthorControls | dict[str, Any] | None = None) -> None:
+        try:
+            author_controls = AuthorControls.model_validate(controls or {})
+            self.store.write_json(run_id, "author_controls.json", author_controls.model_dump(mode="json"))
+            self.store.set_stage(
+                run_id,
+                "await_author_controls",
+                "succeeded",
+                message="Author controls accepted.",
+                run_status=RunStatus.running,
+            )
+            state = self._load_generation_state(run_id, author_controls)
+            self.generate_graph.invoke(state)
             self.store.succeed(run_id)
         except (ChapterParseError, WorkflowValidationError) as exc:
             self.store.fail(run_id, RunStatus.failed_validation, str(exc))
         except Exception as exc:  # pragma: no cover - integration guard
             self.store.fail(run_id, RunStatus.failed_internal, str(exc))
 
-    def _build_graph(self):
+    def _build_plan_graph(self):
         builder = StateGraph(WorkflowState)
         builder.add_node("validate_input", self._validate_input)
         builder.add_node("parse_chapters", self._parse_chapters)
         builder.add_node("extract_story_facts", self._extract_story_facts)
-        builder.add_node("plan_scenes", self._plan_scenes)
+        builder.add_node("plan_adaptation", self._plan_adaptation)
+
+        builder.set_entry_point("validate_input")
+        builder.add_edge("validate_input", "parse_chapters")
+        builder.add_edge("parse_chapters", "extract_story_facts")
+        builder.add_edge("extract_story_facts", "plan_adaptation")
+        builder.add_edge("plan_adaptation", END)
+        return builder.compile()
+
+    def _build_generate_graph(self):
+        builder = StateGraph(WorkflowState)
         builder.add_node("generate_script_json", self._generate_script_json)
         builder.add_node("validate_schema", self._validate_schema)
         builder.add_node("repair_once_if_needed", self._repair_once_if_needed)
         builder.add_node("export_yaml", self._export_yaml)
         builder.add_node("generate_report", self._generate_report)
 
-        builder.set_entry_point("validate_input")
-        builder.add_edge("validate_input", "parse_chapters")
-        builder.add_edge("parse_chapters", "extract_story_facts")
-        builder.add_edge("extract_story_facts", "plan_scenes")
-        builder.add_edge("plan_scenes", "generate_script_json")
+        builder.set_entry_point("generate_script_json")
         builder.add_edge("generate_script_json", "validate_schema")
         builder.add_conditional_edges(
             "validate_schema",
@@ -72,6 +106,27 @@ class AdaptationWorkflow:
         builder.add_edge("export_yaml", "generate_report")
         builder.add_edge("generate_report", END)
         return builder.compile()
+
+    def _load_generation_state(
+        self, run_id: str, author_controls: AuthorControls
+    ) -> WorkflowState:
+        try:
+            chapters = self.store.read_json(run_id, "chapters.json")
+            reader_output = self.store.read_json(run_id, "reader_output.json")
+            planner_output = self.store.read_json(run_id, "planner_output.json")
+            adaptation_plan = self.store.read_json(run_id, "adaptation_plan.json")
+        except Exception as exc:
+            raise WorkflowValidationError(
+                "Run must complete intake planning before generation."
+            ) from exc
+        return {
+            "run_id": run_id,
+            "chapters": chapters,  # type: ignore[typeddict-item]
+            "reader_output": reader_output,  # type: ignore[typeddict-item]
+            "planner_output": planner_output,  # type: ignore[typeddict-item]
+            "adaptation_plan": adaptation_plan,  # type: ignore[typeddict-item]
+            "author_controls": author_controls.model_dump(mode="json"),
+        }
 
     def _start_stage(
         self, state: WorkflowState, name: str, run_status: RunStatus = RunStatus.running
@@ -108,25 +163,39 @@ class AdaptationWorkflow:
         self._finish_stage(state, "extract_story_facts", "Story facts extracted.")
         return {**state, "reader_output": reader_output}
 
-    def _plan_scenes(self, state: WorkflowState) -> WorkflowState:
-        self._start_stage(state, "plan_scenes")
+    def _plan_adaptation(self, state: WorkflowState) -> WorkflowState:
+        self._start_stage(state, "plan_adaptation")
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
         if self.llm.mock:
             raw_planner_output = self._mock_planner_output(chapters)
         else:
             raw_planner_output = self._remote_planner_output(state["reader_output"], chapters)
         planner_output = PlannerOutput.model_validate(raw_planner_output).model_dump(mode="json")
+        adaptation_plan = self._build_adaptation_plan(chapters, state["reader_output"], planner_output)
         self.store.write_json(state["run_id"], "planner_output.json", planner_output)
-        self._finish_stage(state, "plan_scenes", "Scene plan created.")
-        return {**state, "planner_output": planner_output}
+        self.store.write_json(state["run_id"], "adaptation_plan.json", adaptation_plan)
+        self.store.write_text(
+            state["run_id"], "adaptation_plan.md", _plan_markdown(adaptation_plan)
+        )
+        self._finish_stage(state, "plan_adaptation", "Adaptation plan created.")
+        return {**state, "planner_output": planner_output, "adaptation_plan": adaptation_plan}
 
     def _generate_script_json(self, state: WorkflowState) -> WorkflowState:
         self._start_stage(state, "generate_script_json")
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
+        author_controls = AuthorControls.model_validate(state.get("author_controls") or {})
+        adaptation_plan = AdaptationPlan.model_validate(state["adaptation_plan"])
         if self.llm.mock:
-            payload = self._mock_script(chapters, state["planner_output"])
+            payload = self._mock_script(
+                chapters, state["planner_output"], adaptation_plan, author_controls
+            )
         else:
-            payload = self._remote_script(state["reader_output"], state["planner_output"])
+            payload = self._remote_script(
+                state["reader_output"],
+                state["planner_output"],
+                adaptation_plan.model_dump(mode="json"),
+                author_controls.model_dump(mode="json"),
+            )
         script = ScriptJson.model_validate(payload)
         script_payload = script.model_dump(mode="json")
         self.store.write_json(state["run_id"], "script.json", script_payload)
@@ -233,13 +302,72 @@ class AdaptationWorkflow:
                     "id": f"sc_{index:03d}",
                     "title": chapter.title.replace("章", "幕", 1),
                     "source_chapters": [chapter.index],
-                    "dramatic_purpose": "Turn chapter prose into a playable dramatic beat.",
+                    "dramatic_purpose": "Turn inner narration into a playable dramatic beat.",
                     "key_events": [chapter.text[:100]],
+                    "conflict": "The protagonist wants the truth but every clue increases personal risk.",
+                    "emotional_shift": "From guarded curiosity to active determination.",
+                    "source_excerpt": chapter.text[:140],
                 }
             )
         return {"scenes": scenes}
 
-    def _mock_script(self, chapters: list[Chapter], planner_output: dict[str, Any]) -> dict[str, Any]:
+    def _build_adaptation_plan(
+        self,
+        chapters: list[Chapter],
+        reader_output: dict[str, Any],
+        planner_output: dict[str, Any],
+    ) -> dict[str, Any]:
+        facts = ReaderOutput.model_validate(reader_output).facts
+        planner = PlannerOutput.model_validate(planner_output)
+        character_notes = [
+            f"{fact.name}: {fact.description}"
+            for fact in facts
+            if fact.kind == "character"
+        ]
+        plot_threads = [
+            fact.description
+            for fact in facts
+            if fact.kind in {"event", "prop"}
+        ][:5]
+        risks = [
+            AdaptationRisk(
+                severity="warning",
+                target="心理描写外化",
+                message="原文包含内心判断，需要转换成可拍动作、停顿或对白。",
+                suggestion="为每场戏加入可见行动和情绪转折，不只复述背景。",
+            ),
+            AdaptationRisk(
+                severity="info",
+                target="章节覆盖",
+                message="当前计划为每章至少安排一个场景，便于作者追踪来源。",
+                suggestion="如果生成短剧版，可在后续合并相邻低冲突场景。",
+            ),
+        ]
+        plan = AdaptationPlan(
+            summary=(
+                "建议先做忠实但更具戏剧推动力的短剧版：保留人物关系和线索链，"
+                "把心理与氛围转成动作、对白和场景冲突。"
+            ),
+            chapter_count=len(chapters),
+            rationale=[
+                "短剧结构适合在 demo 中展示清晰场景目标和节奏压缩。",
+                "心理外化能直接回应小说改编为可表演内容的核心难点。",
+                "平衡尺度可以保留原著味道，同时允许必要的场景合并和对白改写。",
+            ],
+            character_notes=character_notes,
+            plot_threads=plot_threads,
+            scene_plan=planner.scenes,
+            risks=risks,
+        )
+        return plan.model_dump(mode="json")
+
+    def _mock_script(
+        self,
+        chapters: list[Chapter],
+        planner_output: dict[str, Any],
+        adaptation_plan: AdaptationPlan,
+        controls: AuthorControls,
+    ) -> dict[str, Any]:
         scenes = []
         for scene_plan in planner_output["scenes"]:
             chapter_index = scene_plan["source_chapters"][0]
@@ -250,14 +378,23 @@ class AdaptationWorkflow:
                     "id": scene_plan["id"],
                     "title": scene_plan["title"],
                     "source_chapters": scene_plan["source_chapters"],
+                    "source_excerpt": scene_plan.get("source_excerpt") or scene_plan["key_events"][0],
                     "location_id": location_id,
                     "time_of_day": "night",
                     "characters": characters,
                     "purpose": scene_plan["dramatic_purpose"],
+                    "scene_purpose": scene_plan["dramatic_purpose"],
+                    "conflict": scene_plan.get("conflict")
+                    or "A clue demands action while the character fears what it reveals.",
+                    "emotional_shift": scene_plan.get("emotional_shift")
+                    or "From hesitation to decision.",
+                    "production_risk": "Needs visible behavior so the mystery does not become pure exposition.",
+                    "format_type": controls.format_type.value,
                     "actions": [
                         {
                             "text": f"林夏进入场景，线索推动她继续追查。来源章节：{chapter_index}。",
                             "beat": "investigation",
+                            "origin": "ai_adapted",
                         }
                     ],
                     "dialogues": [
@@ -265,10 +402,18 @@ class AdaptationWorkflow:
                             "speaker_id": "char_linxia",
                             "line": "这条线索不是偶然留下的。",
                             "emotion": "determined",
+                            "origin": "ai_adapted",
                         }
                     ],
+                    "ai_added_content": [
+                        "Add a playable beat that externalizes the chapter's inner suspicion."
+                    ],
+                    "revision_suggestions": [
+                        "Strengthen the opposing force if the scene feels too explanatory."
+                    ],
                     "adaptation_notes": [
-                        "Compress prose exposition into visible action and concise dialogue."
+                        "Compress prose exposition into visible action and concise dialogue.",
+                        f"Author style focus: {controls.style_focus.value}.",
                     ],
                 }
             )
@@ -280,6 +425,12 @@ class AdaptationWorkflow:
                 "genre": "mystery drama",
                 "logline": "A young archivist follows hidden letters through an abandoned theater to uncover why her father vanished.",
             },
+            "adaptation_profile": controls.model_dump(mode="json"),
+            "adaptation_strategy": [
+                adaptation_plan.summary,
+                "Track source chapters and excerpts so the author can audit what changed.",
+                "Label AI additions separately from adapted source material.",
+            ],
             "characters": [
                 {
                     "id": "char_linxia",
@@ -340,7 +491,7 @@ class AdaptationWorkflow:
         self, reader_output: dict[str, Any], chapters: list[Chapter]
     ) -> dict[str, Any]:
         return self.llm.generate_json(
-            "Create a concise screenplay scene plan. Return JSON only matching the provided PlannerOutput schema.",
+            "Create a concise screenplay scene plan with scene purpose, conflict, emotional shift, and source excerpt. Return JSON only matching the provided PlannerOutput schema.",
             {
                 "schema": PlannerOutput.model_json_schema(),
                 "reader_output": reader_output,
@@ -349,7 +500,11 @@ class AdaptationWorkflow:
         )
 
     def _remote_script(
-        self, reader_output: dict[str, Any], planner_output: dict[str, Any]
+        self,
+        reader_output: dict[str, Any],
+        planner_output: dict[str, Any],
+        adaptation_plan: dict[str, Any],
+        author_controls: dict[str, Any],
     ) -> dict[str, Any]:
         return self.llm.generate_json(
             "Generate screenplay JSON matching the provided schema. Return JSON only.",
@@ -357,6 +512,8 @@ class AdaptationWorkflow:
                 "schema": script_json_schema(),
                 "reader_output": reader_output,
                 "planner_output": planner_output,
+                "adaptation_plan": adaptation_plan,
+                "author_controls": author_controls,
             },
         )
 
@@ -401,12 +558,21 @@ class AdaptationWorkflow:
 
 
 def _report_markdown(report: ValidationReport, state: WorkflowState) -> str:
+    controls = AuthorControls.model_validate(state.get("author_controls") or {})
+    plan = AdaptationPlan.model_validate(state.get("adaptation_plan") or {})
     lines = [
         "# Adaptation Report",
         "",
         f"- Valid: `{report.valid}`",
         f"- Summary: {report.summary}",
         f"- Repaired once: `{state.get('repaired', False)}`",
+        f"- Format type: `{controls.format_type.value}`",
+        f"- Adaptation scale: `{controls.adaptation_scale.value}`",
+        f"- Style focus: `{controls.style_focus.value}`",
+        "",
+        "## Strategy",
+        "",
+        plan.summary,
         "",
         "## Issues",
         "",
@@ -418,4 +584,41 @@ def _report_markdown(report: ValidationReport, state: WorkflowState) -> str:
             lines.append(f"- **{issue.severity.value}** `{issue.path}`: {issue.message}")
             if issue.suggestion:
                 lines.append(f"  Suggestion: {issue.suggestion}")
+    return "\n".join(lines) + "\n"
+
+
+def _plan_markdown(plan_payload: dict[str, Any]) -> str:
+    plan = AdaptationPlan.model_validate(plan_payload)
+    lines = [
+        "# Adaptation Plan",
+        "",
+        f"- Chapters: `{plan.chapter_count}`",
+        f"- Recommended format: `{plan.recommended_format_type.value}`",
+        f"- Recommended style: `{plan.recommended_style_focus.value}`",
+        f"- Recommended scale: `{plan.recommended_adaptation_scale.value}`",
+        "",
+        "## Summary",
+        "",
+        plan.summary,
+        "",
+        "## Rationale",
+        "",
+    ]
+    lines.extend(f"- {item}" for item in plan.rationale)
+    lines.extend(["", "## Character Notes", ""])
+    lines.extend(f"- {item}" for item in plan.character_notes)
+    lines.extend(["", "## Scene Plan", ""])
+    for scene in plan.scene_plan:
+        lines.append(
+            f"- `{scene.id}` {scene.title}: {scene.dramatic_purpose} "
+            f"(chapters: {', '.join(str(item) for item in scene.source_chapters)})"
+        )
+        if scene.conflict:
+            lines.append(f"  Conflict: {scene.conflict}")
+        if scene.emotional_shift:
+            lines.append(f"  Emotional shift: {scene.emotional_shift}")
+    lines.extend(["", "## Risks", ""])
+    for risk in plan.risks:
+        lines.append(f"- **{risk.severity}** {risk.target}: {risk.message}")
+        lines.append(f"  Suggestion: {risk.suggestion}")
     return "\n".join(lines) + "\n"

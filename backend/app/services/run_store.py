@@ -13,6 +13,9 @@ ALLOWED_ARTIFACTS = {
     "chapters.json",
     "reader_output.json",
     "planner_output.json",
+    "adaptation_plan.json",
+    "adaptation_plan.md",
+    "author_controls.json",
     "script.json",
     "script.yaml",
     "schema.json",
@@ -25,7 +28,8 @@ WORKFLOW_STAGES = [
     "validate_input",
     "parse_chapters",
     "extract_story_facts",
-    "plan_scenes",
+    "plan_adaptation",
+    "await_author_controls",
     "generate_script_json",
     "validate_schema",
     "repair_once_if_needed",
@@ -143,6 +147,14 @@ class RunStore:
     def succeed(self, run_id: str) -> RunManifest:
         manifest = self.read_manifest(run_id)
         manifest.status = RunStatus.succeeded
+        manifest.current_stage = None
+        manifest.error = None
+        self.write_manifest(manifest)
+        return manifest
+
+    def planned(self, run_id: str) -> RunManifest:
+        manifest = self.read_manifest(run_id)
+        manifest.status = RunStatus.planned
         manifest.current_stage = None
         manifest.error = None
         self.write_manifest(manifest)

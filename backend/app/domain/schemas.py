@@ -16,6 +16,45 @@ class ScriptMetadata(StrictBaseModel):
     logline: str = Field(..., min_length=1, description="One-sentence story premise.")
 
 
+class ScriptFormat(str, Enum):
+    film = "film"
+    short_drama = "short_drama"
+    stage_play = "stage_play"
+    radio_drama = "radio_drama"
+    animation = "animation"
+    game_script = "game_script"
+
+
+class AdaptationScale(str, Enum):
+    faithful = "faithful"
+    balanced = "balanced"
+    bold = "bold"
+
+
+class StyleFocus(str, Enum):
+    psychological = "psychological"
+    action = "action"
+    dialogue = "dialogue"
+    suspense = "suspense"
+    relationship = "relationship"
+    custom = "custom"
+
+
+class ContentOrigin(str, Enum):
+    source_extracted = "source_extracted"
+    ai_adapted = "ai_adapted"
+    ai_added = "ai_added"
+
+
+class AuthorControls(StrictBaseModel):
+    format_type: ScriptFormat = ScriptFormat.short_drama
+    adaptation_scale: AdaptationScale = AdaptationScale.balanced
+    style_focus: StyleFocus = StyleFocus.psychological
+    preserve_items: list[str] = Field(default_factory=list)
+    forbidden_changes: list[str] = Field(default_factory=list)
+    author_notes: str | None = None
+
+
 class Character(StrictBaseModel):
     id: str = Field(..., pattern=r"^char_[a-zA-Z0-9_]+$")
     name: str = Field(..., min_length=1)
@@ -39,29 +78,41 @@ class Prop(StrictBaseModel):
 class ActionCue(StrictBaseModel):
     text: str = Field(..., min_length=1)
     beat: str = Field(default="action", min_length=1)
+    origin: ContentOrigin = ContentOrigin.ai_adapted
 
 
 class DialogueLine(StrictBaseModel):
     speaker_id: str = Field(..., pattern=r"^char_[a-zA-Z0-9_]+$")
     line: str = Field(..., min_length=1)
     emotion: str | None = None
+    origin: ContentOrigin = ContentOrigin.ai_adapted
 
 
 class Scene(StrictBaseModel):
     id: str = Field(..., pattern=r"^sc_[0-9]{3}$")
     title: str = Field(..., min_length=1)
     source_chapters: list[int] = Field(..., min_length=1)
+    source_excerpt: str = Field(..., min_length=1)
     location_id: str = Field(..., pattern=r"^loc_[a-zA-Z0-9_]+$")
     time_of_day: str = Field(default="unspecified")
     characters: list[str] = Field(..., min_length=1)
     purpose: str = Field(..., min_length=1)
+    scene_purpose: str = Field(..., min_length=1)
+    conflict: str = Field(..., min_length=1)
+    emotional_shift: str = Field(..., min_length=1)
+    production_risk: str = Field(..., min_length=1)
+    format_type: ScriptFormat = ScriptFormat.short_drama
     actions: list[ActionCue] = Field(default_factory=list)
     dialogues: list[DialogueLine] = Field(default_factory=list)
+    ai_added_content: list[str] = Field(default_factory=list)
+    revision_suggestions: list[str] = Field(default_factory=list)
     adaptation_notes: list[str] = Field(default_factory=list)
 
 
 class ScriptJson(StrictBaseModel):
     metadata: ScriptMetadata
+    adaptation_profile: AuthorControls = Field(default_factory=AuthorControls)
+    adaptation_strategy: list[str] = Field(default_factory=list)
     characters: list[Character] = Field(..., min_length=1)
     locations: list[Location] = Field(..., min_length=1)
     props: list[Prop] = Field(default_factory=list)
@@ -93,10 +144,33 @@ class ScenePlan(StrictBaseModel):
     source_chapters: list[int]
     dramatic_purpose: str
     key_events: list[str] = Field(default_factory=list)
+    conflict: str = ""
+    emotional_shift: str = ""
+    source_excerpt: str = ""
 
 
 class PlannerOutput(StrictBaseModel):
     scenes: list[ScenePlan] = Field(..., min_length=1)
+
+
+class AdaptationRisk(StrictBaseModel):
+    severity: Literal["info", "warning", "error"] = "warning"
+    target: str
+    message: str
+    suggestion: str
+
+
+class AdaptationPlan(StrictBaseModel):
+    summary: str
+    chapter_count: int = Field(..., ge=3)
+    recommended_format_type: ScriptFormat = ScriptFormat.short_drama
+    recommended_style_focus: StyleFocus = StyleFocus.psychological
+    recommended_adaptation_scale: AdaptationScale = AdaptationScale.balanced
+    rationale: list[str] = Field(default_factory=list)
+    character_notes: list[str] = Field(default_factory=list)
+    plot_threads: list[str] = Field(default_factory=list)
+    scene_plan: list[ScenePlan] = Field(default_factory=list)
+    risks: list[AdaptationRisk] = Field(default_factory=list)
 
 
 class IssueSeverity(str, Enum):
@@ -121,6 +195,7 @@ class ValidationReport(StrictBaseModel):
 class RunStatus(str, Enum):
     queued = "queued"
     running = "running"
+    planned = "planned"
     validating = "validating"
     repairing = "repairing"
     exporting = "exporting"
@@ -169,6 +244,10 @@ class YamlValidationRequest(StrictBaseModel):
 
 class YamlValidationResponse(StrictBaseModel):
     report: ValidationReport
+
+
+class GenerateRunRequest(StrictBaseModel):
+    controls: AuthorControls = Field(default_factory=AuthorControls)
 
 
 def now_iso() -> str:
