@@ -19,5 +19,13 @@ This document is generated from the Pydantic v2 `ScriptJson` model used by the b
 
 ## Design Reason
 
-The schema separates metadata, reusable entities, scenes, actions, dialogues, and adaptation notes so authors can edit the script draft without losing structure. The LLM outputs structured JSON first; the application validates it and exports YAML after validation.
+The schema is designed for an AI adaptation co-writer, not only a YAML formatter.
+It stores the script draft plus adaptation reasoning: author controls, strategy,
+scene purpose, conflict, emotional shift, source excerpt, AI-added content,
+revision suggestions, production risk, and content origin markers. This lets an
+author see what came from the source, what the AI adapted, what the AI added, and
+what should be polished next.
+
+The LLM outputs structured JSON first; the application validates it and exports
+YAML after validation.
 """

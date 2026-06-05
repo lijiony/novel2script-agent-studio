@@ -2,6 +2,22 @@
 
 Use these descriptions when creating GitHub pull requests. Each PR should include feature description, implementation approach, and test method.
 
+## PR: feat: add two-stage adaptation planning workflow
+
+Feature description:
+
+Upgrades Novel2Script from one-shot YAML generation into an AI adaptation co-writer workflow. The backend now supports intake planning before script generation, records author controls, and produces traceable YAML with scene purpose, conflict, emotional shift, source excerpt, AI-added content, revision suggestions, production risk, and origin markers.
+
+Implementation approach:
+
+Adds Pydantic models for author controls and adaptation plans, introduces `/api/runs/intake` and `/api/runs/{run_id}/generate`, splits the LangGraph workflow into planning and generation phases, and keeps the old `/api/runs` endpoint as a compatibility one-shot flow. The frontend workbench is redesigned into three columns: input/control, AI adaptation plan, and YAML/report. Documentation and samples describe the AI co-writer positioning.
+
+Test method:
+
+- Ran backend pytest covering intake rejection, plan generation, generation preconditions, author controls, schema validation, and mock workflow.
+- Ran frontend build and Playwright smoke flow for `分析小说 -> 选择选项 -> 生成剧本 -> 校验 YAML`.
+- Ran full `.\scripts\check.ps1` before final push.
+
 ## PR: chore: harden demo and check scripts
 
 Feature description:

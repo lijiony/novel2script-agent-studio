@@ -20,13 +20,15 @@ TODO: replace with the narrated demo video URL after upload.
 
 ## Short Project Summary
 
-Novel2Script Agent Studio is a lightweight AI workbench that converts three or more chapters of novel text into an editable screenplay YAML draft. It uses a fixed LangGraph workflow to parse chapters, extract story facts, plan scenes, generate structured script JSON, validate the result with Pydantic and JSON Schema, export YAML with `ruamel.yaml`, and generate an adaptation report. The frontend provides a Next.js workbench with a Monaco YAML editor, validation feedback, and artifact downloads.
+Novel2Script Agent Studio is a lightweight AI adaptation co-writer workbench. It first analyzes three or more chapters of novel text, produces an adaptation plan, and lets the author choose script format, style focus, adaptation scale, preserved content, forbidden changes, and notes. It then generates structured script JSON, validates the result with Pydantic and JSON Schema, exports YAML with `ruamel.yaml`, and returns a traceable adaptation report. The frontend provides a three-column Next.js workbench with planning output, author controls, Monaco YAML editing, validation feedback, and artifact downloads.
 
 ## Core Requirement Mapping
 
 | Requirement | Implementation |
 |---|---|
 | Accept 3+ chapters of novel text | Paste/upload `.txt`; backend rejects fewer than three chapters |
+| Plan before generation | `/api/runs/intake` generates `adaptation_plan.json/md` before script generation |
+| Author control | `/api/runs/{run_id}/generate` accepts format, scale, style, preserve, forbidden-change, and notes |
 | Convert novel to structured script | LangGraph pipeline generates structured `script.json` |
 | Output YAML | Validated JSON is exported to `script.yaml` with `ruamel.yaml` |
 | Editable draft | Browser YAML editor supports edits and backend revalidation |
@@ -35,9 +37,9 @@ Novel2Script Agent Studio is a lightweight AI workbench that converts three or m
 
 ## Original Work
 
-- Product workflow and UX design.
+- Product workflow and UX design for a two-stage AI co-writer.
 - Pydantic screenplay schema and semantic validator.
-- Fixed LangGraph adaptation pipeline.
+- Fixed LangGraph planning and generation workflows.
 - Run artifact storage without a database.
 - YAML export and revalidation flow.
 - Next.js workbench and Monaco editor integration.

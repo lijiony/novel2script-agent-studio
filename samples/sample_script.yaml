@@ -5,6 +5,19 @@ metadata:
   genre: mystery drama
   logline: A young archivist follows hidden letters through an abandoned theater
     to uncover why her father vanished.
+adaptation_profile:
+  format_type: short_drama
+  adaptation_scale: faithful
+  style_focus: psychological
+  preserve_items:
+    - 保留林夏、周砚和父亲失踪线索
+  forbidden_changes:
+    - 不要改变父亲失踪的核心设定
+  author_notes: 心理活动尽量转成可表演动作和克制对白。
+adaptation_strategy:
+  - 建议先做忠实但更具戏剧推动力的短剧版：保留人物关系和线索链，把心理与氛围转成动作、对白和场景冲突。
+  - Track source chapters and excerpts so the author can audit what changed.
+  - Label AI additions separately from adapted source material.
 characters:
   - id: char_linxia
     name: 林夏
@@ -37,58 +50,106 @@ scenes:
     title: 第一幕 雨巷里的信
     source_chapters:
       - 1
+    source_excerpt: "林夏在城南档案馆值夜班。傍晚的雨落在窄巷里，像有人把旧照片一张张翻过。她整理一箱无人认领的资料时，看见一封没有编号的信。信封上只有一句话：如果你还记得那盏灯，请在午夜前来旧剧院。\n\
+      \n她本想把信放回去，却在信纸背面看见了父亲的笔迹。父亲三年前失踪，所有线索都停在一场被取消的戏剧排练"
     location_id: loc_archive
     time_of_day: night
     characters:
       - char_linxia
-    purpose: Turn chapter prose into a playable dramatic beat.
+    purpose: Turn inner narration into a playable dramatic beat.
+    scene_purpose: Turn inner narration into a playable dramatic beat.
+    conflict: The protagonist wants the truth but every clue increases personal 
+      risk.
+    emotional_shift: From guarded curiosity to active determination.
+    production_risk: Needs visible behavior so the mystery does not become pure 
+      exposition.
+    format_type: short_drama
     actions:
       - text: 林夏进入场景，线索推动她继续追查。来源章节：1。
         beat: investigation
+        origin: ai_adapted
     dialogues:
       - speaker_id: char_linxia
         line: 这条线索不是偶然留下的。
         emotion: determined
+        origin: ai_adapted
+    ai_added_content:
+      - Add a playable beat that externalizes the chapter's inner suspicion.
+    revision_suggestions:
+      - Strengthen the opposing force if the scene feels too explanatory.
     adaptation_notes:
       - Compress prose exposition into visible action and concise dialogue.
+      - 'Author style focus: psychological.'
   - id: sc_002
     title: 第二幕 旧剧院的灯
     source_chapters:
       - 2
+    source_excerpt: "旧剧院早已停用，门口的海报被雨水泡得褪色。林夏推门进去，舞台中央却亮着一盏孤零零的灯。灯下站着一个陌生老人，自称周砚，是父亲当年的舞台监督。\n\
+      \n周砚告诉她，那场被取消的排练并非意外。剧本里藏着一份账册的位置，而知道秘密的人接连离开。林夏追问父亲是否还活着，周砚只递给她第二封信，说"
     location_id: loc_theater
     time_of_day: night
     characters:
       - char_linxia
       - char_zhouyan
-    purpose: Turn chapter prose into a playable dramatic beat.
+    purpose: Turn inner narration into a playable dramatic beat.
+    scene_purpose: Turn inner narration into a playable dramatic beat.
+    conflict: The protagonist wants the truth but every clue increases personal 
+      risk.
+    emotional_shift: From guarded curiosity to active determination.
+    production_risk: Needs visible behavior so the mystery does not become pure 
+      exposition.
+    format_type: short_drama
     actions:
       - text: 林夏进入场景，线索推动她继续追查。来源章节：2。
         beat: investigation
+        origin: ai_adapted
     dialogues:
       - speaker_id: char_linxia
         line: 这条线索不是偶然留下的。
         emotion: determined
+        origin: ai_adapted
+    ai_added_content:
+      - Add a playable beat that externalizes the chapter's inner suspicion.
+    revision_suggestions:
+      - Strengthen the opposing force if the scene feels too explanatory.
     adaptation_notes:
       - Compress prose exposition into visible action and concise dialogue.
+      - 'Author style focus: psychological.'
   - id: sc_003
     title: 第三幕 第三幕台词
     source_chapters:
       - 3
+    source_excerpt: "林夏翻开旧剧本，发现第三幕的台词被人用铅笔改过。每一句台词的第一个字连起来，是城北钟楼的地址。她意识到父亲留下的不是谜题，而是一条求救路线。\n\
+      \n午夜钟声响起，剧院外传来脚步声。周砚催她从后台离开。林夏握着剧本冲进雨里，身后灯光熄灭。她第一次明白，父亲失踪前一直在保护某个真相，而现"
     location_id: loc_theater
     time_of_day: night
     characters:
       - char_linxia
       - char_zhouyan
-    purpose: Turn chapter prose into a playable dramatic beat.
+    purpose: Turn inner narration into a playable dramatic beat.
+    scene_purpose: Turn inner narration into a playable dramatic beat.
+    conflict: The protagonist wants the truth but every clue increases personal 
+      risk.
+    emotional_shift: From guarded curiosity to active determination.
+    production_risk: Needs visible behavior so the mystery does not become pure 
+      exposition.
+    format_type: short_drama
     actions:
       - text: 林夏进入场景，线索推动她继续追查。来源章节：3。
         beat: investigation
+        origin: ai_adapted
     dialogues:
       - speaker_id: char_linxia
         line: 这条线索不是偶然留下的。
         emotion: determined
+        origin: ai_adapted
+    ai_added_content:
+      - Add a playable beat that externalizes the chapter's inner suspicion.
+    revision_suggestions:
+      - Strengthen the opposing force if the scene feels too explanatory.
     adaptation_notes:
       - Compress prose exposition into visible action and concise dialogue.
+      - 'Author style focus: psychological.'
 adaptation_notes:
   - Keep the mystery clue chain visible from chapter to chapter.
   - Use scene purposes to make the YAML draft easy to continue polishing.
