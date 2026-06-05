@@ -45,7 +45,19 @@ For a stable local demo on Windows, run:
 .\scripts\start-demo.ps1
 ```
 
-Then open `http://127.0.0.1:3000`.
+This starts the backend in mock mode and serves the frontend with a production build for clean screen recording. Then open `http://127.0.0.1:3000`.
+
+For iterative frontend development, run:
+
+```powershell
+.\scripts\start-demo.ps1 -FrontendMode dev
+```
+
+To stop local demo processes:
+
+```powershell
+.\scripts\stop-demo.ps1
+```
 
 ### Backend
 
