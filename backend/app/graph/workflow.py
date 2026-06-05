@@ -523,12 +523,54 @@ class AdaptationWorkflow:
         self, chapter_cards: list[ChapterCard], story_bible: StoryBible
     ) -> dict[str, Any]:
         scenes = []
+        titles = [
+            "雨巷里的信",
+            "旧剧院的灯",
+            "第三幕台词",
+            "线索排成时间线",
+            "钟楼前的决定",
+        ]
         purposes = [
-            "Establish the inciting clue and turn atmosphere into a visible discovery.",
-            "Introduce the mentor figure and make the hidden past confront the protagonist.",
-            "Convert the textual clue into a decisive next-step action beat.",
-            "Compress the chapter into a high-pressure turning point.",
-            "Resolve the immediate question while opening the next dramatic hook.",
+            "用一封没有编号的信引出父亲失踪线索，让观众在第一场就看到林夏被迫行动。",
+            "让周砚作为知情者登场，把旧剧院从背景变成林夏必须面对的阻力。",
+            "把旧剧本里的文字谜题转成可见的解谜动作，并把目标推进到城北钟楼。",
+            "把本章压缩成一个高压转折点，让线索从被动出现变成主角主动重排。",
+            "解决眼前疑问，同时留出下一集或下一场的行动钩子。",
+        ]
+        source_functions = [
+            "本章负责交代主角处境、父亲失踪线索和第一个悬疑钩子。",
+            "本章负责扩展人物关系，让父亲过去的知情者与主角正面相遇。",
+            "本章负责揭示线索规则，把谜题升级为明确的行动路线。",
+            "本章负责把零散线索合并成阶段性判断，推动主角从追随线索变成制定计划。",
+            "本章负责给当前小段落收束，同时打开更大的危险。",
+        ]
+        treatments = [
+            "保留信件、雨夜和档案馆氛围，把林夏的疑惑改成翻档案、核对编号、停顿收信等动作。",
+            "保留旧剧院和舞台灯，把周砚的隐瞒设计成阻拦、沉默和试探，不让对白一次性解释完。",
+            "保留第三幕台词线索，把阅读文字改成圈字、连线、发现地址的连续动作。",
+            "保留本章核心线索，把叙述段落压成一场限时整理和被打断的场面。",
+            "保留结论，但把结论放在一个新的行动决定里，避免只是讲清楚发生了什么。",
+        ]
+        reasons = [
+            "原文的心理判断不能直接表演，所以把“她意识到异常”改成观众能看见的调查动作。",
+            "知情者如果只解释背景会变成说明书，因此要用阻拦和回避制造冲突。",
+            "文字谜题适合被外化成道具动作，这样观众能跟着主角一起发现答案。",
+            "长篇中间章节容易散，先找出转折功能，再决定是否合并或压缩。",
+            "短剧需要每场结尾有推进或反问，所以收束信息时也要保留下一步行动压力。",
+        ]
+        performance_notes = [
+            "重点放在手部翻找、灯光停顿和信封细节，让悬疑从物件里长出来。",
+            "让周砚站在门或灯之间，用走位表达“他知道但不愿说”。",
+            "用铅笔圈字、纸页翻动和地址成形的过程替代内心独白。",
+            "加入倒计时、门外声音或电话打断，让整理线索不变成静态讲解。",
+            "让角色带着未说完的话离开，保留观众继续追的欲望。",
+        ]
+        risk_notes = [
+            "不要用旁白一次性解释父亲往事，第一场只给钩子。",
+            "周砚不能太快交代真相，否则旧剧院的悬念会塌掉。",
+            "解谜过程要让观众看懂，但不要让台词重复解释每一步。",
+            "如果线索太多，优先保留推动行动的那一条。",
+            "不要把结尾写成总结陈词，要留下新的选择。",
         ]
         conflicts = [
             "林夏想确认信件来源，但信上的旧剧院把父亲失踪重新拉回眼前。",
@@ -555,13 +597,18 @@ class AdaptationWorkflow:
             scenes.append(
                 {
                     "id": f"sc_{index:03d}",
-                    "title": card.title.replace("章", "幕", 1),
+                    "title": titles[index - 1] if index <= len(titles) else card.title,
                     "source_chapters": [card.chapter_index],
                     "dramatic_purpose": purposes[index - 1],
                     "key_events": card.key_events or [card.summary],
                     "conflict": conflicts[index - 1],
                     "emotional_shift": shifts[index - 1],
                     "source_excerpt": source_excerpt[:220],
+                    "source_function": source_functions[index - 1],
+                    "adaptation_treatment": treatments[index - 1],
+                    "adaptation_reason": reasons[index - 1],
+                    "performance_notes": performance_notes[index - 1],
+                    "risk_note": risk_notes[index - 1],
                 }
             )
         return {"scenes": scenes}
@@ -611,6 +658,20 @@ class AdaptationWorkflow:
         scope = story_bible.recommended_generation_scope or [
             chapter.index for chapter in chapters[:3]
         ]
+        creative_rationale = [
+            (
+                "前三章已经形成“发现线索 -> 进入旧剧院 -> 读出台词地址”的连续钩子，"
+                "适合短剧按章节落成三场戏，每场结尾都能推动下一步。"
+            ),
+            (
+                "主角的疑惑、警觉和决心主要藏在心理描写里，选择心理外化可以把这些内容改成"
+                "翻找、停顿、试探和克制对白。"
+            ),
+            (
+                "父亲失踪和线索链是原著味道的核心，平衡改编比大胆改编更稳：保留动机和线索，"
+                "只增强冲突、节奏和可表演动作。"
+            ),
+        ]
         plan = AdaptationPlan(
             summary=(
                 f"{story_bible.main_plot} 建议先生成第 "
@@ -619,7 +680,9 @@ class AdaptationWorkflow:
             ),
             chapter_count=len(chapters),
             recommended_generation_scope=scope,
-            rationale=[
+            rationale=creative_rationale,
+            format_rationale=creative_rationale,
+            technical_notes=[
                 f"系统已生成 {len(chapter_cards)} 张章节理解卡，不切碎章节，保留单章语义连贯。",
                 "先用 Story Bible 把主线、人物弧线和线索链合并，再做剧本规划。",
                 "默认只生成推荐章节范围，避免长篇一次性生成导致失控或幻觉。",
@@ -654,11 +717,11 @@ class AdaptationWorkflow:
             "我会去钟楼，但我要先知道谁希望我去。",
         ]
         risks = [
-            "Opening scene needs tactile investigation beats so it does not rely on narration.",
-            "Mentor scene needs blocking and silence to avoid pure exposition.",
-            "Clue-solving scene needs visible pattern discovery so the reveal feels playable.",
-            "Timeline scene may become static; add pressure or interruption if extended.",
-            "Ending beat should preserve suspense instead of over-explaining the next act.",
+            "开场需要足够多的可见调查动作，避免依赖旁白解释。",
+            "周砚登场要靠阻拦、沉默和走位建立张力，避免纯说明。",
+            "解谜场要让观众看见图案和地址如何成形，不能只由角色说出答案。",
+            "整理线索的场面容易静态，延展时应加入时间压力或外部打断。",
+            "结尾要保留悬疑，不要过度解释下一步。",
         ]
         for scene_plan in planner_output["scenes"]:
             chapter_index = scene_plan["source_chapters"][0]
@@ -671,6 +734,7 @@ class AdaptationWorkflow:
                     "title": scene_plan["title"],
                     "source_chapters": scene_plan["source_chapters"],
                     "source_excerpt": scene_plan.get("source_excerpt") or scene_plan["key_events"][0],
+                    "source_function": scene_plan.get("source_function", ""),
                     "location_id": location_id,
                     "time_of_day": "night",
                     "characters": characters,
@@ -679,7 +743,10 @@ class AdaptationWorkflow:
                     "conflict": scene_plan.get("conflict")
                     or "A clue demands action while the character fears what it reveals.",
                     "emotional_shift": scene_plan.get("emotional_shift")
-                    or "From hesitation to decision.",
+                    or "从犹豫到决定继续追查。",
+                    "adaptation_reason": scene_plan.get("adaptation_reason", ""),
+                    "performance_notes": scene_plan.get("performance_notes", ""),
+                    "risk_note": scene_plan.get("risk_note", ""),
                     "production_risk": risks[variant_index],
                     "format_type": controls.format_type.value,
                     "actions": [
@@ -698,14 +765,16 @@ class AdaptationWorkflow:
                         }
                     ],
                     "ai_added_content": [
-                        "Add a playable beat that externalizes the chapter's inner suspicion."
+                        scene_plan.get("adaptation_treatment")
+                        or "增加一个可表演动作，把本章的内心怀疑外化出来。"
                     ],
                     "revision_suggestions": [
-                        "Strengthen the opposing force if the scene feels too explanatory."
+                        scene_plan.get("risk_note")
+                        or "如果场景显得解释感太强，增加阻力或沉默反应。"
                     ],
                     "adaptation_notes": [
-                        "Compress prose exposition into visible action and concise dialogue.",
-                        f"Author style focus: {controls.style_focus.value}.",
+                        "把小说叙述压缩为可见动作和短对白。",
+                        f"作者选择的风格偏向：{controls.style_focus.value}。",
                     ],
                 }
             )
@@ -714,28 +783,28 @@ class AdaptationWorkflow:
                 "title": "雨巷里的来信",
                 "source_chapter_count": len(chapters),
                 "language": "zh-CN",
-                "genre": "mystery drama",
-                "logline": "A young archivist follows hidden letters through an abandoned theater to uncover why her father vanished.",
+                "genre": "悬疑剧情",
+                "logline": "年轻档案员林夏沿着父亲留下的信件和旧剧本，追查他失踪背后的真相。",
             },
             "adaptation_profile": controls.model_dump(mode="json"),
             "adaptation_strategy": [
                 adaptation_plan.summary,
-                "Track source chapters and excerpts so the author can audit what changed.",
-                "Label AI additions separately from adapted source material.",
+                "每场戏保留来源章节和改编理由，方便作者追踪取舍。",
+                "AI 新增内容单独标记，避免和原文提取混在一起。",
             ],
             "characters": [
                 {
                     "id": "char_linxia",
                     "name": "林夏",
-                    "role": "protagonist",
-                    "description": "A careful young archivist who decides to continue her father's unfinished investigation.",
+                    "role": "主角",
+                    "description": "谨慎的年轻档案员，决定继续追查父亲未完成的线索。",
                     "first_appearance_chapter": 1,
                 },
                 {
                     "id": "char_zhouyan",
                     "name": "周砚",
-                    "role": "mentor",
-                    "description": "A former stage manager who reveals the old theater's hidden secret.",
+                    "role": "知情者",
+                    "description": "父亲当年的舞台监督，知道旧剧院背后的秘密。",
                     "first_appearance_chapter": 2,
                 },
             ],
@@ -743,30 +812,30 @@ class AdaptationWorkflow:
                 {
                     "id": "loc_archive",
                     "name": "城南档案馆",
-                    "description": "An old archive near a rain-soaked alley.",
+                    "description": "雨巷旁的旧档案馆，第一封信在这里被发现。",
                 },
                 {
                     "id": "loc_theater",
                     "name": "旧剧院",
-                    "description": "A closed theater where one stage lamp still burns.",
+                    "description": "已经停用的剧院，舞台中央仍亮着一盏灯。",
                 },
             ],
             "props": [
                 {
                     "id": "prop_letter",
                     "name": "没有编号的信",
-                    "description": "A mysterious letter written in the protagonist's father's hand.",
+                    "description": "疑似父亲留下的神秘信件，引导林夏前往旧剧院。",
                 },
                 {
                     "id": "prop_script",
                     "name": "旧剧本",
-                    "description": "A theater script whose third act hides an address.",
+                    "description": "第三幕台词藏着地址的旧剧本。",
                 },
             ],
             "scenes": scenes,
             "adaptation_notes": [
-                "Keep the mystery clue chain visible from chapter to chapter.",
-                "Use scene purposes to make the YAML draft easy to continue polishing.",
+                "保留章节间的悬疑线索链。",
+                "用场景功能和改编理由帮助作者后续继续打磨。",
             ],
         }
 
@@ -782,9 +851,9 @@ class AdaptationWorkflow:
     def _remote_chapter_card(self, chapter: Chapter) -> dict[str, Any]:
         return self._remote_json(
             (
-                "Read one complete novel chapter as the smallest semantic unit. "
-                "Return JSON only matching the ChapterCard schema. Preserve chapter meaning; "
-                "do not invent facts that are not supported by this chapter."
+                "你是小说改编副编剧。请把一个完整章节作为最小语义单元阅读，"
+                "返回严格匹配 ChapterCard schema 的 JSON。所有可展示给作者的字段必须使用简体中文。"
+                "保留本章真实含义，不要编造本章没有支持的人物、线索或事件。"
             ),
             {
                 "schema": ChapterCard.model_json_schema(),
@@ -796,9 +865,9 @@ class AdaptationWorkflow:
     def _remote_story_bible(self, chapter_cards: list[dict[str, Any]]) -> dict[str, Any]:
         return self._remote_json(
             (
-                "Synthesize a whole-novel Story Bible from chapter cards. "
-                "Return JSON only matching the StoryBible schema. Recommend a small generation "
-                "scope, usually the first three chapters, instead of generating the whole novel."
+                "你是小说改编副编剧。请根据逐章理解卡综合一份全书 Story Bible，"
+                "返回严格匹配 StoryBible schema 的 JSON。所有可展示给作者的字段必须使用简体中文。"
+                "推荐一个小的生成范围，通常先选前三章，不要建议一次生成全书剧本。"
             ),
             {
                 "schema": StoryBible.model_json_schema(),
@@ -814,9 +883,15 @@ class AdaptationWorkflow:
     ) -> dict[str, Any]:
         return self._remote_json(
             (
-                "Create a concise screenplay scene plan for the Story Bible's recommended "
-                "generation scope. Return JSON only matching the PlannerOutput schema. "
-                "Each scene must reference source chapters and use evidence from chapter cards."
+                "你是小说改编副编剧。请为 Story Bible 推荐的生成范围创建剧本分场计划，"
+                "返回严格匹配 PlannerOutput schema 的 JSON。所有可展示给作者的字段必须使用简体中文，"
+                "不要把 short_drama、psychological、balanced 这类枚举当成作者说明。"
+                "每场必须引用来源章节，并基于章节理解卡证据说明："
+                "source_function=原文这一章/段落在故事中的功能；"
+                "adaptation_treatment=准备如何把它改成动作、对白、场景或冲突；"
+                "adaptation_reason=为什么这样改，而不是解释系统流程；"
+                "performance_notes=演员、镜头、舞台或声音如何表现；"
+                "risk_note=作者后续打磨时要避免的问题。"
             ),
             {
                 "schema": PlannerOutput.model_json_schema(),
@@ -837,9 +912,11 @@ class AdaptationWorkflow:
     ) -> dict[str, Any]:
         return self._remote_json(
             (
-                "Generate screenplay JSON matching the provided ScriptJson schema. "
-                "Use only the planned scenes, chapter cards, Story Bible, and author controls. "
-                "Return JSON only."
+                "你是小说改编副编剧。请生成严格匹配 ScriptJson schema 的剧本 JSON。"
+                "所有可展示给作者的字段必须使用简体中文。只使用分场计划、章节理解卡、"
+                "Story Bible 和作者控制项，不要编造无证据的主线。每场戏需要保留来源章节、"
+                "原文功能、改编理由、表演提示和风险提示；AI 新增内容必须单独标记。"
+                "返回 JSON only。"
             ),
             {
                 "schema": script_json_schema(),
@@ -906,74 +983,121 @@ def _report_markdown(report: ValidationReport, state: WorkflowState) -> str:
     plan = AdaptationPlan.model_validate(state.get("adaptation_plan") or {})
     story_bible = StoryBible.model_validate(state.get("story_bible") or {})
     lines = [
-        "# Adaptation Report",
+        "# 改编报告",
         "",
-        f"- Valid: `{report.valid}`",
-        f"- Summary: {report.summary}",
-        f"- Repaired once: `{state.get('repaired', False)}`",
-        f"- Format type: `{controls.format_type.value}`",
-        f"- Adaptation scale: `{controls.adaptation_scale.value}`",
-        f"- Style focus: `{controls.style_focus.value}`",
+        f"- 校验通过: `{report.valid}`",
+        f"- 校验摘要: {report.summary}",
+        f"- 是否自动修复过: `{state.get('repaired', False)}`",
+        f"- 剧本类型: {_format_label(controls.format_type.value)}",
+        f"- 改编尺度: {_scale_label(controls.adaptation_scale.value)}",
+        f"- 风格偏向: {_style_label(controls.style_focus.value)}",
         "",
-        "## Strategy",
+        "## 改编策略",
         "",
         plan.summary,
         "",
-        "## Long Novel Handling",
+        "## 长文本处理",
         "",
-        f"- Story Bible main plot: {story_bible.main_plot}",
-        f"- Recommended generation scope: `{', '.join(str(item) for item in plan.recommended_generation_scope)}`",
-        f"- Chapter cards used: `{len(story_bible.chapter_index)}`",
+        f"- Story Bible 主线: {story_bible.main_plot}",
+        f"- 推荐生成范围: 第 {', '.join(str(item) for item in plan.recommended_generation_scope)} 章",
+        f"- 使用章节理解卡: `{len(story_bible.chapter_index)}` 张",
+        *[f"- {item}" for item in plan.technical_notes],
         "",
-        "## Issues",
+        "## 校验问题",
         "",
     ]
     if not report.issues:
-        lines.append("No validation issues were found.")
+        lines.append("没有发现校验问题。")
     else:
         for issue in report.issues:
             lines.append(f"- **{issue.severity.value}** `{issue.path}`: {issue.message}")
             if issue.suggestion:
-                lines.append(f"  Suggestion: {issue.suggestion}")
+                lines.append(f"  建议: {issue.suggestion}")
     return "\n".join(lines) + "\n"
 
 
 def _plan_markdown(plan_payload: dict[str, Any]) -> str:
     plan = AdaptationPlan.model_validate(plan_payload)
     lines = [
-        "# Adaptation Plan",
+        "# 改编计划",
         "",
-        f"- Chapters: `{plan.chapter_count}`",
-        f"- Recommended format: `{plan.recommended_format_type.value}`",
-        f"- Recommended style: `{plan.recommended_style_focus.value}`",
-        f"- Recommended scale: `{plan.recommended_adaptation_scale.value}`",
-        f"- Recommended generation scope: `{', '.join(str(item) for item in plan.recommended_generation_scope)}`",
+        f"- 章节数: `{plan.chapter_count}`",
+        f"- 推荐剧本类型: {_format_label(plan.recommended_format_type.value)}",
+        f"- 推荐风格: {_style_label(plan.recommended_style_focus.value)}",
+        f"- 推荐尺度: {_scale_label(plan.recommended_adaptation_scale.value)}",
+        f"- 推荐生成范围: 第 {', '.join(str(item) for item in plan.recommended_generation_scope)} 章",
         "",
-        "## Summary",
+        "## 我理解的故事",
         "",
         plan.summary,
         "",
-        "## Rationale",
+        "## 为什么推荐这个方向",
         "",
     ]
-    lines.extend(f"- {item}" for item in plan.rationale)
-    lines.extend(["", "## Character Notes", ""])
+    lines.extend(f"- {item}" for item in (plan.format_rationale or plan.rationale))
+    lines.extend(["", "## 主要人物和关系", ""])
     lines.extend(f"- {item}" for item in plan.character_notes)
-    lines.extend(["", "## Scene Plan", ""])
+    lines.extend(["", "## 分章改编理由", ""])
     for scene in plan.scene_plan:
-        lines.append(
-            f"- `{scene.id}` {scene.title}: {scene.dramatic_purpose} "
-            f"(chapters: {', '.join(str(item) for item in scene.source_chapters)})"
-        )
+        lines.append(f"### `{scene.id}` {scene.title}")
+        lines.append("")
+        lines.append(f"- 来源章节: 第 {', '.join(str(item) for item in scene.source_chapters)} 章")
+        lines.append(f"- 原文功能: {scene.source_function or scene.dramatic_purpose}")
+        lines.append(f"- 改编处理: {scene.adaptation_treatment or scene.dramatic_purpose}")
+        lines.append(f"- 为什么这样改: {scene.adaptation_reason or scene.dramatic_purpose}")
+        if scene.performance_notes:
+            lines.append(f"- 表演化提示: {scene.performance_notes}")
         if scene.conflict:
-            lines.append(f"  Conflict: {scene.conflict}")
+            lines.append(f"- 核心冲突: {scene.conflict}")
         if scene.emotional_shift:
-            lines.append(f"  Emotional shift: {scene.emotional_shift}")
-    lines.extend(["", "## Risks", ""])
+            lines.append(f"- 情绪变化: {scene.emotional_shift}")
+        if scene.risk_note:
+            lines.append(f"- 风险提醒: {scene.risk_note}")
+        lines.append("")
+    lines.extend(["## 长文本处理说明", ""])
+    lines.extend(f"- {item}" for item in plan.technical_notes)
+    lines.extend(["", "## 风险提醒", ""])
     for risk in plan.risks:
         lines.append(f"- **{risk.severity}** {risk.target}: {risk.message}")
-        lines.append(f"  Suggestion: {risk.suggestion}")
-    return "\n".join(lines) + "\n"
+        lines.append(f"  建议: {risk.suggestion}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+SCRIPT_FORMAT_LABELS = {
+    "film": "影视剧本",
+    "short_drama": "短剧",
+    "stage_play": "舞台剧",
+    "radio_drama": "广播剧",
+    "animation": "动画",
+    "game_script": "游戏脚本",
+}
+
+STYLE_FOCUS_LABELS = {
+    "psychological": "心理外化",
+    "action": "动作推进",
+    "dialogue": "对白强化",
+    "suspense": "悬疑节奏",
+    "relationship": "关系冲突",
+    "custom": "自定义",
+}
+
+ADAPTATION_SCALE_LABELS = {
+    "faithful": "忠实改编",
+    "balanced": "平衡改编",
+    "bold": "大胆改编",
+}
+
+
+def _format_label(value: str) -> str:
+    return SCRIPT_FORMAT_LABELS.get(value, value)
+
+
+def _style_label(value: str) -> str:
+    return STYLE_FOCUS_LABELS.get(value, value)
+
+
+def _scale_label(value: str) -> str:
+    return ADAPTATION_SCALE_LABELS.get(value, value)
 
 
 def _story_bible_markdown(story_bible_payload: dict[str, Any]) -> str:

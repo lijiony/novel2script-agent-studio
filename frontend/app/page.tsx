@@ -57,6 +57,45 @@ type StoryBible = {
   }>;
 };
 
+type ScenePlan = {
+  id: string;
+  title: string;
+  source_chapters: number[];
+  dramatic_purpose: string;
+  key_events: string[];
+  conflict: string;
+  emotional_shift: string;
+  source_excerpt: string;
+  source_function: string;
+  adaptation_treatment: string;
+  adaptation_reason: string;
+  performance_notes: string;
+  risk_note: string;
+};
+
+type AdaptationRisk = {
+  severity: "info" | "warning" | "error";
+  target: string;
+  message: string;
+  suggestion: string;
+};
+
+type AdaptationPlan = {
+  summary: string;
+  chapter_count: number;
+  recommended_format_type: AuthorControls["format_type"];
+  recommended_style_focus: AuthorControls["style_focus"];
+  recommended_adaptation_scale: AuthorControls["adaptation_scale"];
+  recommended_generation_scope: number[];
+  rationale: string[];
+  format_rationale: string[];
+  technical_notes: string[];
+  character_notes: string[];
+  plot_threads: string[];
+  scene_plan: ScenePlan[];
+  risks: AdaptationRisk[];
+};
+
 const sampleText = `第一章 雨巷里的信
 
 林夏在城南档案馆值夜班。傍晚的雨落在窄巷里，像有人把旧照片一张张翻过。她整理一箱无人认领的资料时，看见一封没有编号的信。信封上只有一句话：如果你还记得那盏灯，请在午夜前来旧剧院。
@@ -118,6 +157,7 @@ export default function Home() {
   const [run, setRun] = useState<RunInfo | null>(null);
   const [controls, setControls] = useState<AuthorControls>(defaultControls);
   const [planMarkdown, setPlanMarkdown] = useState("");
+  const [adaptationPlan, setAdaptationPlan] = useState<AdaptationPlan | null>(null);
   const [chapterCards, setChapterCards] = useState<ChapterCard[]>([]);
   const [storyBible, setStoryBible] = useState<StoryBible | null>(null);
   const [storyBibleMarkdown, setStoryBibleMarkdown] = useState("");
@@ -139,7 +179,7 @@ export default function Home() {
     run && !terminalStatuses.has(run.status) && (run.status !== "planned" || generationRequested),
   );
   const phase = getConversationPhase(run, isPolling, generationRequested, error, yamlText);
-  const plan = useMemo(() => parsePlanMarkdown(planMarkdown), [planMarkdown]);
+  const fallbackPlan = useMemo(() => parsePlanMarkdown(planMarkdown), [planMarkdown]);
   const hasArtifacts = Boolean(run?.artifacts.length);
   const completed = phase === "completed";
   const totalChapterChars = chapterCards.reduce((sum, card) => sum + card.char_count, 0);
@@ -212,6 +252,7 @@ export default function Home() {
     setBusy(true);
     setError(null);
     setPlanMarkdown("");
+    setAdaptationPlan(null);
     setChapterCards([]);
     setStoryBible(null);
     setStoryBibleMarkdown("");
@@ -293,13 +334,15 @@ export default function Home() {
   }
 
   async function loadPlanningArtifacts(runId: string) {
-    const [nextPlan, cardsText, bibleText, bibleMarkdown] = await Promise.all([
+    const [nextPlanMarkdown, nextPlanJson, cardsText, bibleText, bibleMarkdown] = await Promise.all([
       getArtifactWithRetry(runId, "adaptation_plan.md"),
+      getArtifactWithRetry(runId, "adaptation_plan.json"),
       getArtifactWithRetry(runId, "chapter_cards.json"),
       getArtifactWithRetry(runId, "story_bible.json"),
       getArtifactWithRetry(runId, "story_bible.md"),
     ]);
-    setPlanMarkdown(nextPlan);
+    setPlanMarkdown(nextPlanMarkdown);
+    setAdaptationPlan(JSON.parse(nextPlanJson) as AdaptationPlan);
     setChapterCards(JSON.parse(cardsText) as ChapterCard[]);
     setStoryBible(JSON.parse(bibleText) as StoryBible);
     setStoryBibleMarkdown(bibleMarkdown);
@@ -468,7 +511,7 @@ export default function Home() {
                 storyBible={storyBible}
                 totalChapterChars={totalChapterChars}
               />
-              <PlanCards plan={plan} />
+              <PlanCards fallbackPlan={fallbackPlan} plan={adaptationPlan} />
             </AssistantMessage>
           ) : null}
 
@@ -762,33 +805,102 @@ function AuthorControlCard({
   );
 }
 
-function PlanCards({ plan }: { plan: ParsedPlan }) {
+function PlanCards({
+  fallbackPlan,
+  plan,
+}: {
+  fallbackPlan: ParsedPlan;
+  plan: AdaptationPlan | null;
+}) {
+  const recommended = plan
+    ? [
+        labelFromOptions(formatOptions, plan.recommended_format_type),
+        labelFromOptions(focusOptions, plan.recommended_style_focus),
+        labelFromOptions(scaleOptions, plan.recommended_adaptation_scale),
+      ].join(" / ")
+    : fallbackPlan.recommended || "短剧 / 心理外化 / 平衡改编";
+  const rationale = plan?.format_rationale.length
+    ? plan.format_rationale
+    : plan?.rationale.length
+      ? plan.rationale
+      : fallbackPlan.rationale;
+  const risks = plan?.risks.length
+    ? plan.risks.map((risk) => `${risk.target}：${risk.message}`)
+    : fallbackPlan.risks;
+  const technicalNotes = plan?.technical_notes ?? [];
+
   return (
     <div className="plan-card-grid">
       <div className="insight-card wide">
         <span>我理解的故事</span>
-        <p>{plan.summary || "已完成章节检测，准备根据原文线索制定改编方向。"}</p>
+        <p>{plan?.summary || fallbackPlan.summary || "已完成章节检测，准备根据原文线索制定改编方向。"}</p>
       </div>
       <div className="insight-card">
         <span>推荐改编方向</span>
-        <p>{plan.recommended || "短剧 / 心理外化 / 平衡改编"}</p>
+        <p>{recommended}</p>
       </div>
       <div className="insight-card">
-        <span>为什么这样改</span>
+        <span>为什么推荐这个方向</span>
         <ul>
-          {plan.rationale.length ? plan.rationale.map((item) => <li key={item}>{item}</li>) : <li>先保留主线，再把心理描写转成动作和对白。</li>}
+          {rationale.length ? rationale.map((item) => <li key={item}>{item}</li>) : <li>先保留主线，再把心理描写转成动作和对白。</li>}
         </ul>
       </div>
       <div className="insight-card wide">
-        <span>场景拆分</span>
-        <ul>
-          {plan.scenes.length ? plan.scenes.map((item) => <li key={item}>{item}</li>) : <li>AI 会按章节拆成可表演的场景。</li>}
-        </ul>
+        <span>分章改编理由</span>
+        {plan?.scene_plan.length ? (
+          <div className="scene-reason-list">
+            {plan.scene_plan.slice(0, 5).map((scene) => (
+              <div className="scene-reason-card" key={scene.id}>
+                <strong>
+                  {scene.id} · {scene.title} · 第 {scene.source_chapters.join(", ")} 章
+                </strong>
+                <dl>
+                  <div>
+                    <dt>原文功能</dt>
+                    <dd>{scene.source_function || scene.dramatic_purpose}</dd>
+                  </div>
+                  <div>
+                    <dt>改编处理</dt>
+                    <dd>{scene.adaptation_treatment || scene.dramatic_purpose}</dd>
+                  </div>
+                  <div>
+                    <dt>为什么这样改</dt>
+                    <dd>{scene.adaptation_reason || "把章节里的叙述内容转成可表演动作、对白和冲突。"}</dd>
+                  </div>
+                  {scene.performance_notes ? (
+                    <div>
+                      <dt>表演化提示</dt>
+                      <dd>{scene.performance_notes}</dd>
+                    </div>
+                  ) : null}
+                  {scene.risk_note ? (
+                    <div>
+                      <dt>风险提醒</dt>
+                      <dd>{scene.risk_note}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <ul>
+            {fallbackPlan.scenes.length ? fallbackPlan.scenes.map((item) => <li key={item}>{item}</li>) : <li>AI 会按章节拆成可表演的场景。</li>}
+          </ul>
+        )}
       </div>
+      {technicalNotes.length ? (
+        <div className="insight-card wide technical-notes">
+          <span>长文本处理说明</span>
+          <ul>
+            {technicalNotes.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </div>
+      ) : null}
       <div className="insight-card wide">
         <span>风险提醒</span>
         <ul>
-          {plan.risks.length ? plan.risks.map((item) => <li key={item}>{item}</li>) : <li>心理描写需要外化，避免剧本只是在解释背景。</li>}
+          {risks.length ? risks.map((item) => <li key={item}>{item}</li>) : <li>心理描写需要外化，避免剧本只是在解释背景。</li>}
         </ul>
       </div>
     </div>
@@ -985,16 +1097,26 @@ function parsePlanMarkdown(markdown: string): ParsedPlan {
   const lines = markdown.split(/\r?\n/).map((line) => line.trim());
   return {
     recommended: [
-      findValue(lines, "- Recommended format:"),
-      findValue(lines, "- Recommended style:"),
-      findValue(lines, "- Recommended scale:"),
+      findValue(lines, "- 推荐剧本类型:") || findValue(lines, "- Recommended format:"),
+      findValue(lines, "- 推荐风格:") || findValue(lines, "- Recommended style:"),
+      findValue(lines, "- 推荐尺度:") || findValue(lines, "- Recommended scale:"),
     ]
       .filter(Boolean)
       .join(" / "),
-    rationale: sectionBullets(lines, "## Rationale"),
-    risks: sectionBullets(lines, "## Risks").map((item) => item.replace(/\*\*/g, "")),
-    scenes: sectionBullets(lines, "## Scene Plan").slice(0, 5),
-    summary: sectionText(lines, "## Summary"),
+    rationale: sectionBullets(lines, "## 为什么推荐这个方向").length
+      ? sectionBullets(lines, "## 为什么推荐这个方向")
+      : sectionBullets(lines, "## Rationale"),
+    risks: (
+      sectionBullets(lines, "## 风险提醒").length
+        ? sectionBullets(lines, "## 风险提醒")
+        : sectionBullets(lines, "## Risks")
+    ).map((item) => item.replace(/\*\*/g, "")),
+    scenes: (
+      sectionBullets(lines, "## 分章改编理由").length
+        ? sectionBullets(lines, "## 分章改编理由")
+        : sectionBullets(lines, "## Scene Plan")
+    ).slice(0, 5),
+    summary: sectionText(lines, "## 我理解的故事") || sectionText(lines, "## Summary"),
   };
 }
 
@@ -1035,6 +1157,13 @@ function sectionBullets(lines: string[], heading: string): string[] {
     }
   }
   return collected;
+}
+
+function labelFromOptions<T extends string>(
+  options: readonly (readonly [T, string])[],
+  value: T,
+): string {
+  return options.find(([candidate]) => candidate === value)?.[1] ?? value;
 }
 
 function getConversationPhase(

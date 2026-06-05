@@ -38,8 +38,17 @@ def test_mock_workflow_generates_artifacts(tmp_path):
     ChapterCard.model_validate(chapter_cards[0])
     StoryBible.model_validate(store.read_json(manifest.run_id, "story_bible.json"))
     ReaderOutput.model_validate(store.read_json(manifest.run_id, "reader_output.json"))
-    PlannerOutput.model_validate(store.read_json(manifest.run_id, "planner_output.json"))
-    AdaptationPlan.model_validate(store.read_json(manifest.run_id, "adaptation_plan.json"))
+    planner_output = PlannerOutput.model_validate(store.read_json(manifest.run_id, "planner_output.json"))
+    plan = AdaptationPlan.model_validate(store.read_json(manifest.run_id, "adaptation_plan.json"))
+    plan_markdown = store.read_text(manifest.run_id, "adaptation_plan.md")
+    assert planner_output.scenes[0].source_function
+    assert planner_output.scenes[0].adaptation_reason
+    assert plan.format_rationale
+    assert plan.technical_notes
+    assert "为什么推荐这个方向" in plan_markdown
+    assert "分章改编理由" in plan_markdown
+    assert "长文本处理说明" in plan_markdown
+    assert "short_drama" not in plan_markdown
     assert "story_bible.md" in final_manifest.artifacts
     assert "script.json" in final_manifest.artifacts
     assert "script.yaml" in final_manifest.artifacts
@@ -85,6 +94,9 @@ def test_mock_workflow_supports_plan_then_generate(tmp_path):
     assert script["adaptation_profile"]["format_type"] == "short_drama"
     assert script["adaptation_profile"]["style_focus"] == "psychological"
     assert script["scenes"][0]["format_type"] == "short_drama"
+    assert script["scenes"][0]["source_function"]
+    assert script["scenes"][0]["adaptation_reason"]
+    assert script["scenes"][0]["performance_notes"]
     assert script["scenes"][0]["actions"][0]["origin"] == "ai_adapted"
 
 
@@ -109,6 +121,8 @@ def test_mock_workflow_handles_many_chapters_without_chunking(tmp_path):
     assert len(chapter_cards) == 50
     assert story_bible.recommended_generation_scope == [1, 2, 3]
     assert plan.recommended_generation_scope == [1, 2, 3]
+    assert plan.technical_notes
+    assert plan.scene_plan[0].adaptation_reason
 
 
 def test_workflow_falls_back_to_mock_without_api_key(tmp_path):

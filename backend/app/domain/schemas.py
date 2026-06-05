@@ -93,6 +93,10 @@ class Scene(StrictBaseModel):
     title: str = Field(..., min_length=1)
     source_chapters: list[int] = Field(..., min_length=1)
     source_excerpt: str = Field(..., min_length=1)
+    source_function: str = Field(
+        default="",
+        description="What the source chapter or passage does in the original story.",
+    )
     location_id: str = Field(..., pattern=r"^loc_[a-zA-Z0-9_]+$")
     time_of_day: str = Field(default="unspecified")
     characters: list[str] = Field(..., min_length=1)
@@ -100,6 +104,18 @@ class Scene(StrictBaseModel):
     scene_purpose: str = Field(..., min_length=1)
     conflict: str = Field(..., min_length=1)
     emotional_shift: str = Field(..., min_length=1)
+    adaptation_reason: str = Field(
+        default="",
+        description="Why this adaptation choice helps the scene become playable.",
+    )
+    performance_notes: str = Field(
+        default="",
+        description="How actors, camera, staging, or sound can externalize the prose.",
+    )
+    risk_note: str = Field(
+        default="",
+        description="Specific creative risk to watch when revising this scene.",
+    )
     production_risk: str = Field(..., min_length=1)
     format_type: ScriptFormat = ScriptFormat.short_drama
     actions: list[ActionCue] = Field(default_factory=list)
@@ -209,6 +225,11 @@ class ScenePlan(StrictBaseModel):
     conflict: str = ""
     emotional_shift: str = ""
     source_excerpt: str = ""
+    source_function: str = ""
+    adaptation_treatment: str = ""
+    adaptation_reason: str = ""
+    performance_notes: str = ""
+    risk_note: str = ""
 
 
 class PlannerOutput(StrictBaseModel):
@@ -230,6 +251,8 @@ class AdaptationPlan(StrictBaseModel):
     recommended_adaptation_scale: AdaptationScale = AdaptationScale.balanced
     recommended_generation_scope: list[int] = Field(default_factory=list)
     rationale: list[str] = Field(default_factory=list)
+    format_rationale: list[str] = Field(default_factory=list)
+    technical_notes: list[str] = Field(default_factory=list)
     character_notes: list[str] = Field(default_factory=list)
     plot_threads: list[str] = Field(default_factory=list)
     scene_plan: list[ScenePlan] = Field(default_factory=list)

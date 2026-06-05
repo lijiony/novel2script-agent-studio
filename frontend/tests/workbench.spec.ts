@@ -15,6 +15,12 @@ test("opens the artifact panel only after generation or explicit artifact action
 
   await expect(page.getByText("副编剧建议")).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText("全书主线")).toBeVisible();
+  await expect(page.getByText("为什么推荐这个方向")).toBeVisible();
+  await expect(page.getByText("分章改编理由")).toBeVisible();
+  await expect(page.getByText("原文功能").first()).toBeVisible();
+  await expect(page.getByText("改编处理").first()).toBeVisible();
+  await expect(page.getByText("为什么这样改").first()).toBeVisible();
+  await expect(page.getByText("长文本处理说明")).toBeVisible();
   await expect(page.locator(".metric-row").getByText("建议先生成", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "采纳计划并生成剧本" })).toBeVisible();
   await expect(page.getByTestId("artifact-panel")).toHaveCount(0);

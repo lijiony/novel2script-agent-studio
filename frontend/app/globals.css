@@ -408,6 +408,56 @@ select:focus {
   margin-top: 6px;
 }
 
+.scene-reason-list {
+  display: grid;
+  gap: 10px;
+}
+
+.scene-reason-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.scene-reason-card strong {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.scene-reason-card dl {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.scene-reason-card dl div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.scene-reason-card dt {
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.scene-reason-card dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.technical-notes {
+  background: var(--warm-soft);
+}
+
 .long-novel-overview {
   display: grid;
   gap: 10px;
@@ -859,6 +909,11 @@ select:focus {
 
   .control-card label:nth-child(n + 4) {
     grid-column: auto;
+  }
+
+  .scene-reason-card dl div {
+    grid-template-columns: 1fr;
+    gap: 3px;
   }
 
   .artifact-tabs,

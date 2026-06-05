@@ -20,7 +20,12 @@ SAMPLE_TEXT = """第一章 开始
 
 
 def _client_with_store(tmp_path):
-    settings = Settings(USE_MOCK_LLM=True, RUNS_DIR=tmp_path)
+    settings = Settings(
+        USE_MOCK_LLM=True,
+        OPENAI_API_KEY=None,
+        OPENAI_BASE_URL=None,
+        RUNS_DIR=tmp_path,
+    )
     store = RunStore(tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_run_store] = lambda: store
