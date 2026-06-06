@@ -26,12 +26,16 @@
 }
 
 html {
+  height: 100%;
   min-height: 100%;
+  overflow: hidden;
 }
 
 body {
   margin: 0;
+  height: 100%;
   min-height: 100%;
+  overflow: hidden;
   background:
     linear-gradient(180deg, #f9faf7 0, var(--bg) 280px),
     var(--bg);
@@ -99,9 +103,12 @@ select:focus {
 }
 
 .workspace {
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
   display: grid;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .workspace-compact {
@@ -114,7 +121,11 @@ select:focus {
 
 .sidebar {
   min-width: 0;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: 18px 14px;
   display: flex;
   flex-direction: column;
@@ -220,6 +231,7 @@ select:focus {
 }
 
 .task-list {
+  flex: 0 0 auto;
   min-height: 0;
   display: grid;
   gap: 7px;
@@ -269,12 +281,16 @@ select:focus {
 }
 
 .empty-task {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
   border: 1px dashed rgba(255, 255, 255, 0.14);
   border-radius: 7px;
   padding: 10px;
 }
 
 .sidebar-actions {
+  flex: 0 0 auto;
   display: grid;
   gap: 8px;
   margin-top: auto;
@@ -310,7 +326,9 @@ select:focus {
 .chat-shell {
   min-width: 0;
   height: 100vh;
+  height: 100dvh;
   overflow: auto;
+  overscroll-behavior: contain;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0)),
     var(--bg);
@@ -1112,6 +1130,10 @@ select:focus {
 .artifact-panel {
   min-width: 0;
   height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--line);
@@ -1122,6 +1144,10 @@ select:focus {
 .chapter-chat-panel {
   min-width: 0;
   height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--line);
@@ -1166,6 +1192,7 @@ select:focus {
   min-height: 0;
   flex: 1;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 14px;
   display: grid;
   align-content: start;
@@ -1302,6 +1329,7 @@ select:focus {
   min-height: 0;
   flex: 1;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 16px;
 }
 
@@ -1560,16 +1588,30 @@ select:focus {
   }
 }
 
-@media (max-width: 960px) {
+@media (max-width: 720px) {
+  html,
+  body {
+    height: auto;
+    min-height: 100%;
+    overflow: auto;
+  }
+
   .workspace,
   .workspace-compact,
   .workspace-with-artifact {
+    height: auto;
+    min-height: 100vh;
     display: block;
     overflow: visible;
+    overscroll-behavior: auto;
   }
 
   .sidebar {
+    height: auto;
     min-height: auto;
+    max-height: none;
+    overflow: visible;
+    overscroll-behavior: auto;
     position: sticky;
     top: 0;
     z-index: 5;
@@ -1606,11 +1648,14 @@ select:focus {
   .chat-shell {
     height: auto;
     overflow: visible;
+    overscroll-behavior: auto;
   }
 
   .artifact-panel {
     height: auto;
     min-height: 70vh;
+    overflow: visible;
+    overscroll-behavior: auto;
     border-left: 0;
     border-top: 1px solid var(--line);
     box-shadow: 0 -12px 30px rgba(31, 39, 35, 0.08);
@@ -1619,6 +1664,8 @@ select:focus {
   .chapter-chat-panel {
     height: auto;
     min-height: 70vh;
+    overflow: visible;
+    overscroll-behavior: auto;
     border-left: 0;
     border-top: 1px solid var(--line);
     box-shadow: 0 -12px 30px rgba(31, 39, 35, 0.08);
@@ -1626,6 +1673,8 @@ select:focus {
 
   .artifact-body {
     max-height: none;
+    overflow: visible;
+    overscroll-behavior: auto;
   }
 
   .chapter-chat-messages {
@@ -1647,7 +1696,7 @@ select:focus {
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 640px) {
   .chat-header,
   .message-list {
     width: min(100% - 24px, 1040px);
