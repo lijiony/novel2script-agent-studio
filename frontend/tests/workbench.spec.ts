@@ -38,9 +38,13 @@ test("reviews chapters before planning and keeps artifacts hidden until script g
   await expect(page.getByTestId("chapter-chat-panel")).toBeVisible();
   await expect(page.getByTestId("artifact-panel")).toHaveCount(0);
   await page.getByPlaceholder(/指出你不满意的地方/).fill("这一章父亲留下线索的动机要更明确。");
+  const chapterChatResponse = page.waitForResponse((response) => (
+    response.url().includes("/chapter-cards/ch_001/chat/stream")
+    && response.request().method() === "POST"
+  ));
   await page.getByTestId("chapter-chat-panel").getByRole("button", { name: "发送" }).click();
-  await expect(page.getByText("思考摘要")).toBeVisible();
-  await expect(page.getByText("重新理解本章")).toBeVisible();
+  expect((await chapterChatResponse).ok()).toBeTruthy();
+  await expect(page.getByRole("button", { name: "带着讨论重新理解" })).toBeVisible();
   await page.getByTestId("chapter-chat-panel").getByRole("button", { name: "关闭" }).click();
 
   await page.getByRole("button", { name: "全部通过" }).click();
@@ -84,9 +88,17 @@ test("reviews chapters before planning and keeps artifacts hidden until script g
   await expect(page.getByRole("button", { name: "确认并重写对应章节" })).toBeDisabled();
   await page.getByLabel("确认要重写的章节").selectOption("ch_003");
   await expect(page.getByRole("button", { name: "确认并重写对应章节" })).toBeEnabled();
+  const applyFeedbackResponse = page.waitForResponse((response) => (
+    response.url().includes("/final-feedback/")
+    && response.url().includes("/apply")
+    && response.request().method() === "POST"
+  ));
   await page.getByRole("button", { name: "确认并重写对应章节" }).click();
+  expect((await applyFeedbackResponse).ok()).toBeTruthy();
   await expect(page.getByText("章节剧本卡确认")).toBeVisible({ timeout: 45_000 });
-  await page.locator(".script-workbench").getByRole("button", { name: "全部通过" }).click();
+  const approveAllScriptsAgain = page.locator(".script-workbench").getByRole("button", { name: "全部通过" });
+  await expect(approveAllScriptsAgain).toBeEnabled({ timeout: 45_000 });
+  await approveAllScriptsAgain.click();
   await expect(page.getByText("所有章节剧本卡已通过")).toBeVisible();
   const mergeButton = page.locator(".script-workbench").getByRole("button", { name: "连贯性合成并导出 YAML" });
   await expect(mergeButton).toBeEnabled();

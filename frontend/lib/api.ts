@@ -234,24 +234,6 @@ export type ChapterChatMessagesResponse = {
   messages: ChapterChatMessage[];
 };
 
-export async function createRun(text: string, file?: File | null): Promise<RunInfo> {
-  const form = new FormData();
-  if (file) {
-    form.append("file", file);
-  } else {
-    form.append("text", text);
-  }
-  const response = await fetch(`${API_BASE_URL}/api/runs`, {
-    method: "POST",
-    body: form,
-  });
-  if (!response.ok) {
-    throw new Error(await errorText(response));
-  }
-  const result = await response.json();
-  return getRun(result.run_id);
-}
-
 export async function listRuns(): Promise<RunListItem[]> {
   const response = await fetch(`${API_BASE_URL}/api/runs`);
   if (!response.ok) {
@@ -283,7 +265,7 @@ export async function generateRun(
   runId: string,
   controls: AuthorControls,
 ): Promise<RunInfo> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/generate`, {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/generate`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

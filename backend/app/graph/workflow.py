@@ -76,6 +76,13 @@ def _chapter_number_markers(index: int) -> list[str]:
     return markers
 
 
+def _compact_text(value: str, limit: int = 240) -> str:
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "..."
+
+
 class AdaptationWorkflow:
     def __init__(self, settings: Settings, store: RunStore):
         self.settings = settings
@@ -85,16 +92,14 @@ class AdaptationWorkflow:
         self.plan_graph = self._build_plan_graph()
         self.generate_graph = self._build_generate_graph()
 
-    def run(self, run_id: str) -> None:
-        self.intake(run_id)
-        if self.store.read_manifest(run_id).status == RunStatus.awaiting_chapter_review:
-            self.approve_all_chapters(run_id)
-            self.build_plan(run_id)
-        if self.store.read_manifest(run_id).status == RunStatus.planned:
-            self.generate(run_id, AuthorControls())
-        if self.store.read_manifest(run_id).status == RunStatus.awaiting_script_review:
-            self.approve_all_chapter_scripts(run_id)
-            self.continuity_merge(run_id)
+    def _assert_run_status(
+        self,
+        run_id: str,
+        expected: tuple[RunStatus, ...],
+        message: str,
+    ) -> None:
+        if self.store.read_manifest(run_id).status not in expected:
+            raise WorkflowValidationError(message)
 
     def intake(self, run_id: str) -> None:
         try:
@@ -119,6 +124,12 @@ class AdaptationWorkflow:
 
     def build_plan(self, run_id: str, *, require_approved: bool = True) -> None:
         try:
+            if require_approved:
+                self._assert_run_status(
+                    run_id,
+                    (RunStatus.awaiting_chapter_review,),
+                    "Run is not awaiting chapter review.",
+                )
             state = self._load_planning_state(run_id, require_approved=require_approved)
             self.plan_graph.invoke(state)
             self.store.planned(run_id)
@@ -130,6 +141,11 @@ class AdaptationWorkflow:
             self.store.fail(run_id, RunStatus.failed_internal, str(exc))
 
     def approve_chapter(self, run_id: str, chapter_id: str) -> None:
+        self._assert_run_status(
+            run_id,
+            (RunStatus.awaiting_chapter_review,),
+            "Run is not awaiting chapter review.",
+        )
         reviews = self._read_reviews(run_id)
         cards = [
             ChapterCard.model_validate(item)
@@ -153,6 +169,11 @@ class AdaptationWorkflow:
         self.store.set_status(run_id, RunStatus.awaiting_chapter_review)
 
     def approve_all_chapters(self, run_id: str) -> None:
+        self._assert_run_status(
+            run_id,
+            (RunStatus.awaiting_chapter_review,),
+            "Run is not awaiting chapter review.",
+        )
         reviews = self._read_reviews(run_id)
         cards = [
             ChapterCard.model_validate(item)
@@ -174,8 +195,18 @@ class AdaptationWorkflow:
         self._write_reviews(run_id, reviews)
         self.store.set_status(run_id, RunStatus.awaiting_chapter_review)
 
-    def regenerate_chapter(self, run_id: str, chapter_id: str) -> None:
+    def regenerate_chapter(
+        self,
+        run_id: str,
+        chapter_id: str,
+        feedback_notes: str | None = None,
+    ) -> None:
         try:
+            self._assert_run_status(
+                run_id,
+                (RunStatus.awaiting_chapter_review,),
+                "Run is not awaiting chapter review.",
+            )
             chapters = [
                 Chapter.model_validate(item)
                 for item in self.store.read_json(run_id, "chapters.json")
@@ -204,9 +235,9 @@ class AdaptationWorkflow:
                 run_status=RunStatus.regenerating_chapter,
             )
             raw_card = (
-                self._mock_chapter_cards([chapter])[0]
+                self._mock_chapter_cards([chapter], feedback_notes=feedback_notes)[0]
                 if self.llm.mock
-                else self._remote_chapter_card(chapter)
+                else self._remote_chapter_card(chapter, feedback_notes=feedback_notes)
             )
             new_card = ChapterCard.model_validate(raw_card).model_dump(mode="json")
             current_cards = [
@@ -276,6 +307,11 @@ class AdaptationWorkflow:
 
     def generate(self, run_id: str, controls: AuthorControls | dict[str, Any] | None = None) -> None:
         try:
+            self._assert_run_status(
+                run_id,
+                (RunStatus.planned,),
+                "Run is not ready for chapter script generation.",
+            )
             author_controls = AuthorControls.model_validate(controls or {})
             self.store.write_json(run_id, "author_controls.json", author_controls.model_dump(mode="json"))
             self.store.set_stage(
@@ -294,6 +330,11 @@ class AdaptationWorkflow:
             self.store.fail(run_id, RunStatus.failed_internal, str(exc))
 
     def approve_chapter_script(self, run_id: str, chapter_id: str) -> None:
+        self._assert_run_status(
+            run_id,
+            (RunStatus.awaiting_script_review,),
+            "Run is not awaiting chapter script review.",
+        )
         reviews = self._read_script_reviews(run_id)
         cards = self._read_chapter_script_cards(run_id)
         if chapter_id not in {card.chapter_id for card in cards}:
@@ -314,6 +355,11 @@ class AdaptationWorkflow:
         self.store.set_status(run_id, RunStatus.awaiting_script_review)
 
     def approve_all_chapter_scripts(self, run_id: str) -> None:
+        self._assert_run_status(
+            run_id,
+            (RunStatus.awaiting_script_review,),
+            "Run is not awaiting chapter script review.",
+        )
         reviews = self._read_script_reviews(run_id)
         cards = self._read_chapter_script_cards(run_id)
         ready_ids = {card.chapter_id for card in cards}
@@ -339,6 +385,11 @@ class AdaptationWorkflow:
         feedback: ScriptFeedback | dict[str, Any] | None = None,
     ) -> None:
         try:
+            self._assert_run_status(
+                run_id,
+                (RunStatus.awaiting_script_review, RunStatus.awaiting_final_review),
+                "Run is not ready for chapter script regeneration.",
+            )
             feedback_model = (
                 ScriptFeedback.model_validate(feedback)
                 if feedback is not None
@@ -462,6 +513,13 @@ class AdaptationWorkflow:
                 ScriptFeedback.model_validate(feedback)
                 if feedback is not None
                 else None
+            )
+            self._assert_run_status(
+                run_id,
+                (RunStatus.awaiting_final_review,)
+                if feedback_model
+                else (RunStatus.awaiting_script_review,),
+                "Run is not ready for continuity merge.",
             )
             self._assert_script_reviews_approved(run_id)
             author_controls = AuthorControls.model_validate(
@@ -785,12 +843,31 @@ class AdaptationWorkflow:
             )
         story_bible = StoryBible.model_validate(state["story_bible"])
         adaptation_plan = AdaptationPlan.model_validate(state["adaptation_plan"])
-        scope = set(story_bible.recommended_generation_scope or [1, 2, 3])
+        approved_cards = sorted(
+            [card for card in chapter_cards if card.chapter_id in approved_ids],
+            key=lambda item: item.chapter_index,
+        )
+        scope = set(
+            story_bible.recommended_generation_scope
+            or adaptation_plan.recommended_generation_scope
+            or [1, 2, 3]
+        )
         source_cards = [
             card
-            for card in chapter_cards
-            if card.chapter_id in approved_ids and card.chapter_index in scope
-        ] or [card for card in chapter_cards if card.chapter_id in approved_ids][:3]
+            for card in approved_cards
+            if card.chapter_index in scope
+        ]
+        min_card_count = min(3, len(approved_cards))
+        if len(source_cards) < min_card_count:
+            selected_ids = {card.chapter_id for card in source_cards}
+            for card in approved_cards:
+                if card.chapter_id in selected_ids:
+                    continue
+                source_cards.append(card)
+                selected_ids.add(card.chapter_id)
+                if len(source_cards) >= min_card_count:
+                    break
+        source_cards.sort(key=lambda item: item.chapter_index)
         chapters_by_id = {f"ch_{chapter.index:03d}": chapter for chapter in chapters}
         script_reviews = [
             ChapterScriptReview(chapter_id=card.chapter_id, status="pending")
@@ -1157,8 +1234,13 @@ class AdaptationWorkflow:
             return "export"
         return "repair"
 
-    def _mock_chapter_cards(self, chapters: list[Chapter]) -> list[dict[str, Any]]:
+    def _mock_chapter_cards(
+        self,
+        chapters: list[Chapter],
+        feedback_notes: str | None = None,
+    ) -> list[dict[str, Any]]:
         cards = []
+        feedback_summary = _compact_text(feedback_notes or "", 180)
         for chapter in chapters:
             excerpt = chapter.text[:160]
             key_event = excerpt.rstrip("。！？\n") or chapter.title
@@ -1177,6 +1259,19 @@ class AdaptationWorkflow:
                 for clue in ["没有编号的信", "旧剧院", "第三幕台词", "城北钟楼"]
                 if clue in chapter.text
             ] or [f"{chapter.title} 的关键线索"]
+            adaptation_opportunities = [
+                "把内心判断外化为动作、停顿和对物件的检查。",
+                "保留原章节氛围，同时增加可表演的冲突压力。",
+            ]
+            continuity_notes = [
+                f"本章应在后续改编中保留为第 {chapter.index} 章来源。"
+            ]
+            if feedback_summary:
+                adaptation_opportunities.insert(
+                    0,
+                    f"重读时优先校正作者指出的问题：{feedback_summary}",
+                )
+                continuity_notes.append(f"作者讨论反馈：{feedback_summary}")
             card = ChapterCard(
                 chapter_id=f"ch_{chapter.index:03d}",
                 chapter_index=chapter.index,
@@ -1191,10 +1286,7 @@ class AdaptationWorkflow:
                 ],
                 emotional_beats=["疑惑", "警觉", "行动"],
                 clues=clues,
-                adaptation_opportunities=[
-                    "把内心判断外化为动作、停顿和对物件的检查。",
-                    "保留原章节氛围，同时增加可表演的冲突压力。",
-                ],
+                adaptation_opportunities=adaptation_opportunities,
                 source_quotes=[
                     SourceQuote(
                         quote=excerpt,
@@ -1202,9 +1294,7 @@ class AdaptationWorkflow:
                         confidence="medium",
                     )
                 ],
-                continuity_notes=[
-                    f"本章应在后续改编中保留为第 {chapter.index} 章来源。"
-                ],
+                continuity_notes=continuity_notes,
             )
             cards.append(card.model_dump(mode="json"))
         return cards
@@ -1824,6 +1914,7 @@ class AdaptationWorkflow:
             for card in sorted(script_cards, key=lambda item: item.chapter_index)
             for scene in card.scenes
         ]
+        scenes, characters, locations = self._normalize_script_references(scenes)
         feedback_note = (
             f"本次合成已吸收作者最终反馈：{feedback.complaint}"
             if feedback
@@ -1844,34 +1935,8 @@ class AdaptationWorkflow:
                 "连贯性合成只调整过渡、节奏提示和衔接说明，不擅自推翻已通过章节核心剧情。",
                 feedback_note,
             ],
-            "characters": [
-                {
-                    "id": "char_linxia",
-                    "name": "林夏",
-                    "role": "主角",
-                    "description": "谨慎但逐渐主动的追查者，把父亲留下的线索变成行动。",
-                    "first_appearance_chapter": 1,
-                },
-                {
-                    "id": "char_zhouyan",
-                    "name": "周砚",
-                    "role": "知情者",
-                    "description": "与旧剧院和父亲过去有关的知情者，推动主角接近真相。",
-                    "first_appearance_chapter": 2,
-                },
-            ],
-            "locations": [
-                {
-                    "id": "loc_archive",
-                    "name": "城南档案馆",
-                    "description": "主角发现第一条线索的旧档案空间。",
-                },
-                {
-                    "id": "loc_theater",
-                    "name": "旧剧院",
-                    "description": "承载父亲过去和线索链的核心场景。",
-                },
-            ],
+            "characters": characters,
+            "locations": locations,
             "props": [
                 {
                     "id": "prop_letter",
@@ -1891,6 +1956,129 @@ class AdaptationWorkflow:
             ],
         }
 
+    def _normalize_script_references(
+        self,
+        scenes: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        characters: dict[str, dict[str, Any]] = {
+            "char_linxia": {
+                "id": "char_linxia",
+                "name": "林夏",
+                "role": "主角",
+                "description": "谨慎但逐渐主动的追查者，把父亲留下的线索变成行动。",
+                "first_appearance_chapter": 1,
+            },
+            "char_zhouyan": {
+                "id": "char_zhouyan",
+                "name": "周砚",
+                "role": "知情者",
+                "description": "与旧剧院和父亲过去有关的知情者，推动主角接近真相。",
+                "first_appearance_chapter": 2,
+            },
+        }
+        locations: dict[str, dict[str, Any]] = {
+            "loc_archive": {
+                "id": "loc_archive",
+                "name": "城南档案馆",
+                "description": "主角发现第一条线索的旧档案空间。",
+            },
+            "loc_theater": {
+                "id": "loc_theater",
+                "name": "旧剧院",
+                "description": "承载父亲过去和线索链的核心场景。",
+            },
+            "loc_clocktower": {
+                "id": "loc_clocktower",
+                "name": "城北钟楼",
+                "description": "多条线索汇合、制造下一步悬念的地点。",
+            },
+        }
+        character_aliases = {
+            "林夏": "char_linxia",
+            "char_lin_xia": "char_linxia",
+            "char_linxia": "char_linxia",
+            "周砚": "char_zhouyan",
+            "char_zhou_yan": "char_zhouyan",
+            "char_zhouyan": "char_zhouyan",
+            "母亲": "char_mother",
+            "char_mother": "char_mother",
+            "char_muqin": "char_mother",
+            "父亲": "char_father",
+            "char_father": "char_father",
+            "char_fuqin": "char_father",
+        }
+        location_aliases = {
+            "城南档案馆": "loc_archive",
+            "旧剧院": "loc_theater",
+            "loc_old_theater": "loc_theater",
+            "loc_jiujuyuan": "loc_theater",
+            "城北钟楼": "loc_clocktower",
+            "loc_clock_tower": "loc_clocktower",
+            "loc_clocktower": "loc_clocktower",
+            "loc_zhonglou": "loc_clocktower",
+            "林夏家": "loc_home",
+            "loc_home": "loc_home",
+        }
+        character_names = {
+            "char_mother": "母亲",
+            "char_father": "父亲",
+        }
+        location_names = {
+            "loc_home": "林夏家",
+        }
+        for scene in scenes:
+            source_chapter = min(scene.get("source_chapters") or [1])
+            location_id = self._canonical_reference_id(
+                str(scene.get("location_id") or "loc_archive"),
+                location_aliases,
+            )
+            scene["location_id"] = location_id
+            if location_id not in locations:
+                locations[location_id] = {
+                    "id": location_id,
+                    "name": location_names.get(location_id, self._fallback_reference_name(location_id, "地点")),
+                    "description": "来自已通过章节剧本卡的场景地点。",
+                }
+            scene_characters = [
+                self._canonical_reference_id(str(character_id), character_aliases)
+                for character_id in scene.get("characters", [])
+            ]
+            for dialogue in scene.get("dialogues", []):
+                speaker_id = self._canonical_reference_id(
+                    str(dialogue.get("speaker_id") or "char_linxia"),
+                    character_aliases,
+                )
+                dialogue["speaker_id"] = speaker_id
+                scene_characters.append(speaker_id)
+            if not scene_characters:
+                scene_characters.append("char_linxia")
+            normalized_characters = []
+            for character_id in scene_characters:
+                if character_id not in normalized_characters:
+                    normalized_characters.append(character_id)
+                if character_id not in characters:
+                    characters[character_id] = {
+                        "id": character_id,
+                        "name": character_names.get(
+                            character_id,
+                            self._fallback_reference_name(character_id, "角色"),
+                        ),
+                        "role": "角色",
+                        "description": "来自已通过章节剧本卡的对白或行动角色。",
+                        "first_appearance_chapter": source_chapter,
+                    }
+            scene["characters"] = normalized_characters
+        return scenes, list(characters.values()), list(locations.values())
+
+    @staticmethod
+    def _canonical_reference_id(value: str, aliases: dict[str, str]) -> str:
+        return aliases.get(value, value)
+
+    @staticmethod
+    def _fallback_reference_name(value: str, fallback: str) -> str:
+        stripped = value.split("_", 1)[1] if "_" in value else value
+        return stripped.replace("_", " ").strip() or fallback
+
     def _remote_reader_output(self, chapters: list[Chapter]) -> dict[str, Any]:
         return self._remote_json(
             "Extract characters, locations, events, and props. Return JSON only matching the provided ReaderOutput schema.",
@@ -1900,17 +2088,24 @@ class AdaptationWorkflow:
             },
         )
 
-    def _remote_chapter_card(self, chapter: Chapter) -> dict[str, Any]:
+    def _remote_chapter_card(
+        self,
+        chapter: Chapter,
+        feedback_notes: str | None = None,
+    ) -> dict[str, Any]:
         return self._remote_json(
             (
                 "你是小说改编副编剧。请把一个完整章节作为最小语义单元阅读，"
                 "返回严格匹配 ChapterCard schema 的 JSON。所有可展示给作者的字段必须使用简体中文。"
                 "保留本章真实含义，不要编造本章没有支持的人物、线索或事件。"
+                "如果 payload 中有 author_feedback_notes，必须优先用它校正本章理解，"
+                "并在 adaptation_opportunities 或 continuity_notes 中说明吸收了哪些反馈。"
             ),
             {
                 "schema": ChapterCard.model_json_schema(),
                 "chapter": chapter.model_dump(mode="json"),
                 "chapter_id": f"ch_{chapter.index:03d}",
+                "author_feedback_notes": feedback_notes or "",
             },
         )
 

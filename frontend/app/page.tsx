@@ -211,6 +211,7 @@ export default function Home() {
     && chapterReviews.every((item) => item.review.status === "approved" && item.card);
   const allScriptsApproved = chapterScriptReviews.length > 0
     && chapterScriptReviews.every((item) => item.review.status === "approved" && item.script_card);
+  const canReviewScripts = Boolean(run?.run_id && run.status === "awaiting_script_review");
   const canBuildPlan = Boolean(run?.run_id && run.status === "awaiting_chapter_review" && allChaptersApproved);
   const canGenerate = Boolean(run?.run_id && run.status === "planned");
   const canContinuityMerge = Boolean(run?.run_id && run.status === "awaiting_script_review" && allScriptsApproved);
@@ -677,6 +678,7 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = "";
       let collected = "";
+      let finalized = false;
       while (true) {
         const { value, done } = await reader.read();
         if (done) {
@@ -694,10 +696,9 @@ export default function Home() {
             setVisibleThinking(String(payload.content ?? ""));
           }
           if (payload.type === "tool_event") {
-            setToolEvents((current) => [
-              ...current,
-              `${String(payload.name ?? "tool")}：${String(payload.status ?? "ready")}`,
-            ]);
+            const name = String(payload.name ?? "tool");
+            const status = String(payload.status ?? "ready");
+            setToolEvents((current) => [...current, `${name}：${status}`]);
           }
           if (payload.type === "assistant_delta") {
             const chunk = String(payload.content ?? "");
@@ -708,15 +709,26 @@ export default function Home() {
             const content = collected || String(payload.content ?? "");
             setChatMessages((current) => [...current, { role: "assistant", content }]);
             setAssistantDraft("");
+            setVisibleThinking("");
+            setToolEvents([]);
+            finalized = true;
           }
           if (payload.type === "error") {
             throw new Error(String(payload.content ?? "Chapter chat failed."));
           }
         }
       }
+      if (!finalized && collected) {
+        setChatMessages((current) => [...current, { role: "assistant", content: collected }]);
+        setAssistantDraft("");
+        setVisibleThinking("");
+        setToolEvents([]);
+      }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
       setAssistantDraft("");
+      setVisibleThinking("");
+      setToolEvents([]);
     } finally {
       setBusy(false);
     }
@@ -894,6 +906,7 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = "";
       let collected = "";
+      let finalized = false;
       while (true) {
         const { value, done } = await reader.read();
         if (done) {
@@ -929,15 +942,23 @@ export default function Home() {
             const content = collected || String(payload.content ?? "");
             setFinalFeedbackMessages((current) => [...current, { role: "assistant", content }]);
             setFinalFeedbackDraft("");
+            setFinalFeedbackThinking("");
+            finalized = true;
           }
           if (payload.type === "error") {
             throw new Error(String(payload.content ?? "Final feedback chat failed."));
           }
         }
       }
+      if (!finalized && collected) {
+        setFinalFeedbackMessages((current) => [...current, { role: "assistant", content: collected }]);
+        setFinalFeedbackDraft("");
+        setFinalFeedbackThinking("");
+      }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
       setFinalFeedbackDraft("");
+      setFinalFeedbackThinking("");
     } finally {
       setBusy(false);
     }
@@ -1270,6 +1291,7 @@ export default function Home() {
               <ChapterScriptReviewWorkbench
                 allApproved={allScriptsApproved}
                 busy={busy}
+                canApprove={canReviewScripts}
                 canMerge={canContinuityMerge}
                 expanded={scriptReviewsExpanded}
                 filter={scriptReviewFilter}
@@ -1581,6 +1603,7 @@ function ChapterReviewCard({
 function ChapterScriptReviewWorkbench({
   allApproved,
   busy,
+  canApprove,
   canMerge,
   expanded,
   filter,
@@ -1597,6 +1620,7 @@ function ChapterScriptReviewWorkbench({
 }: {
   allApproved: boolean;
   busy: boolean;
+  canApprove: boolean;
   canMerge: boolean;
   expanded: boolean;
   filter: ReviewFilter;
@@ -1635,7 +1659,7 @@ function ChapterScriptReviewWorkbench({
         </div>
       </div>
       <div className="review-actions">
-        <button type="button" disabled={!items.length || busy} onClick={onApproveAll}>
+        <button type="button" disabled={!canApprove || !items.length || busy} onClick={onApproveAll}>
           全部通过
         </button>
         <button type="button" disabled={!canMerge || busy} onClick={onMerge}>
@@ -1649,6 +1673,7 @@ function ChapterScriptReviewWorkbench({
         {visibleItems.map((item) => (
           <ChapterScriptReviewCard
             busy={busy}
+            canApprove={canApprove}
             item={item}
             key={item.review.chapter_id}
             onApprove={onApprove}
@@ -1670,6 +1695,7 @@ function ChapterScriptReviewWorkbench({
 
 function ChapterScriptReviewCard({
   busy,
+  canApprove,
   item,
   onApprove,
   onDiscuss,
@@ -1678,6 +1704,7 @@ function ChapterScriptReviewCard({
   setOpen,
 }: {
   busy: boolean;
+  canApprove: boolean;
   item: ChapterScriptReviewItem;
   onApprove: (chapterId: string) => void;
   onDiscuss: (chapterId: string) => void;
@@ -1736,10 +1763,10 @@ function ChapterScriptReviewCard({
         <button type="button" disabled={!card} onClick={() => onDiscuss(chapterId)}>
           讨论/修改剧本
         </button>
-        <button type="button" disabled={busy || !card || item.review.status === "approved"} onClick={() => onApprove(chapterId)}>
+        <button type="button" disabled={!canApprove || busy || !card || item.review.status === "approved"} onClick={() => onApprove(chapterId)}>
           通过
         </button>
-        <button type="button" disabled={busy} onClick={() => onRegenerate(chapterId)}>
+        <button type="button" disabled={!canApprove || busy || !card} onClick={() => onRegenerate(chapterId)}>
           重写本章
         </button>
       </div>
@@ -1780,6 +1807,10 @@ function ChapterChatPanel({
   toolEvents: string[];
   visibleThinking: string;
 }) {
+  const hasDiscussion = messages.some((message) => message.role === "user");
+  const regenerateLabel = mode === "script"
+    ? hasDiscussion ? "带着讨论重写本章剧本卡" : "重写本章剧本卡"
+    : hasDiscussion ? "带着讨论重新理解" : "重新理解本章";
   return (
     <aside className="chapter-chat-panel" data-testid="chapter-chat-panel">
       <div className="artifact-header">
@@ -1797,7 +1828,7 @@ function ChapterChatPanel({
             <span>{chapterId} · {wordCount ?? 0} 字</span>
             <p>{summary}</p>
             <button type="button" disabled={busy} onClick={() => onRegenerate(chapterId)}>
-              {mode === "script" ? "重写本章剧本卡" : "重新理解本章"}
+              {regenerateLabel}
             </button>
           </>
         ) : (
@@ -1811,7 +1842,7 @@ function ChapterChatPanel({
             <p>{message.content}</p>
           </div>
         )) : (
-          <div className="hint-card">你可以告诉 AI：哪条线索没读准、哪个人物动机必须保留、哪些心理描写不要乱改。</div>
+          <div className="hint-card">先和 AI 说清楚哪里不合你意。讨论确认后，可以带着这段上下文重新理解或重写本章。</div>
         )}
         {visibleThinking ? (
           <div className="visible-thinking">

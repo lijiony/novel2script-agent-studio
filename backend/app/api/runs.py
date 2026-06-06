@@ -37,11 +37,20 @@ from app.domain.schemas import (
 )
 from app.domain.validators import validate_yaml_text
 from app.graph.workflow import AdaptationWorkflow
-from app.services.tool_registry import ToolContext, ToolRegistry
+from app.services.llm_client import LlmClient
 from app.services.run_store import ALLOWED_ARTIFACTS, RunStore
 
 
 router = APIRouter(prefix="/api", tags=["runs"])
+
+
+def _assert_manifest_status(
+    status: RunStatus,
+    expected: set[RunStatus],
+    detail: str,
+) -> None:
+    if status not in expected:
+        raise HTTPException(status_code=409, detail=detail)
 
 
 @router.get("/runs", response_model=RunListResponse)
@@ -68,27 +77,6 @@ def list_runs(store: RunStore = Depends(get_run_store)) -> RunListResponse:
             )
         )
     return RunListResponse(runs=items)
-
-
-@router.post("/runs", response_model=CreateRunResponse)
-async def create_run(
-    background_tasks: BackgroundTasks,
-    text: str | None = Form(default=None),
-    file: UploadFile | None = File(default=None),
-    settings: Settings = Depends(get_settings),
-    store: RunStore = Depends(get_run_store),
-) -> CreateRunResponse:
-    input_text = await _read_input(text, file)
-    if len(input_text) > settings.max_input_chars:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Input is too long. Limit is {settings.max_input_chars} characters.",
-        )
-    _assert_three_chapters(input_text, settings)
-    manifest = store.create_run(input_text)
-    workflow = AdaptationWorkflow(settings, store)
-    background_tasks.add_task(workflow.run, manifest.run_id)
-    return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
 
 
 @router.post("/runs/intake", response_model=CreateRunResponse)
@@ -134,8 +122,16 @@ def approve_chapter_card(
     store: RunStore = Depends(get_run_store),
 ) -> ChapterReviewsResponse:
     try:
+        manifest = store.read_manifest(run_id)
+        _assert_manifest_status(
+            manifest.status,
+            {RunStatus.awaiting_chapter_review},
+            "Run is not awaiting chapter review.",
+        )
         AdaptationWorkflow(settings, store).approve_chapter(run_id, chapter_id)
         return _chapter_reviews_response(run_id, store)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -147,8 +143,16 @@ def approve_all_chapter_cards(
     store: RunStore = Depends(get_run_store),
 ) -> ChapterReviewsResponse:
     try:
+        manifest = store.read_manifest(run_id)
+        _assert_manifest_status(
+            manifest.status,
+            {RunStatus.awaiting_chapter_review},
+            "Run is not awaiting chapter review.",
+        )
         AdaptationWorkflow(settings, store).approve_all_chapters(run_id)
         return _chapter_reviews_response(run_id, store)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -162,13 +166,22 @@ def regenerate_chapter_card(
     store: RunStore = Depends(get_run_store),
 ) -> ChapterReviewsResponse:
     try:
-        store.read_manifest(run_id)
+        manifest = store.read_manifest(run_id)
+        _assert_manifest_status(
+            manifest.status,
+            {RunStatus.awaiting_chapter_review},
+            "Run is not awaiting chapter review.",
+        )
+        feedback_notes = _discussion_notes(run_id, store, chapter_id, "chapter_chat_messages.json")
         background_tasks.add_task(
             AdaptationWorkflow(settings, store).regenerate_chapter,
             run_id,
             chapter_id,
+            feedback_notes,
         )
         return _chapter_reviews_response(run_id, store)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -182,6 +195,11 @@ def build_plan(
 ) -> CreateRunResponse:
     try:
         manifest = store.read_manifest(run_id)
+        _assert_manifest_status(
+            manifest.status,
+            {RunStatus.awaiting_chapter_review},
+            "Run is not awaiting chapter review.",
+        )
         _assert_reviews_approved(run_id, store)
         background_tasks.add_task(AdaptationWorkflow(settings, store).build_plan, manifest.run_id)
         return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
@@ -196,6 +214,7 @@ def chapter_chat_stream(
     run_id: str,
     chapter_id: str,
     request: ChapterChatRequest,
+    settings: Settings = Depends(get_settings),
     store: RunStore = Depends(get_run_store),
 ) -> StreamingResponse:
     try:
@@ -219,24 +238,11 @@ def chapter_chat_stream(
         created_at=now_iso(),
     )
     _append_chat_message(run_id, store, user_message)
+    chat_messages = _chat_messages_for_chapter(run_id, store, chapter_id)
 
     def event_stream() -> Iterator[str]:
-        context = ToolContext(run_id=run_id, chapter_id=chapter_id)
-        tools = ToolRegistry().available_tools(context)
-        yield _sse("visible_thinking", {"content": "我正在重新核对这一章的人物、线索和改编机会。"})
-        yield _sse(
-            "tool_event",
-            {
-                "name": "tool_registry",
-                "status": "disabled",
-                "tools": [tool.__dict__ for tool in tools],
-            },
-        )
-        answer = (
-            f"我看了 {item.chapter.title} 的理解卡。当前摘要是：{item.card.summary} "
-            "如果你觉得这一章读偏了，建议先点“重新理解”，我会只刷新这一章，"
-            "不会影响其他已经通过的章节。你也可以在备注里指出必须保留的人物动机或线索。"
-        )
+        yield _sse("visible_thinking", {"content": "我正在对照原文、理解卡和你刚才的反馈，判断哪里可能读偏。"})
+        answer = _chapter_discussion_answer(settings, item.chapter, item.card, chat_messages)
         chunks = [answer[index : index + 28] for index in range(0, len(answer), 28)]
         collected = ""
         for chunk in chunks:
@@ -277,27 +283,6 @@ def get_chapter_chat_messages(
         if item.get("chapter_id") == chapter_id
     ]
     return ChapterChatMessagesResponse(messages=messages)
-
-
-@router.post("/runs/{run_id}/generate", response_model=CreateRunResponse)
-def generate_run(
-    run_id: str,
-    request: GenerateRunRequest,
-    background_tasks: BackgroundTasks,
-    settings: Settings = Depends(get_settings),
-    store: RunStore = Depends(get_run_store),
-) -> CreateRunResponse:
-    try:
-        manifest = store.read_manifest(run_id)
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail="Run not found.") from exc
-    if "adaptation_plan.json" not in manifest.artifacts:
-        raise HTTPException(status_code=400, detail="Run must complete intake planning first.")
-    if manifest.status not in {RunStatus.planned, RunStatus.succeeded, RunStatus.failed_validation}:
-        raise HTTPException(status_code=409, detail="Run is not ready for generation.")
-    workflow = AdaptationWorkflow(settings, store)
-    background_tasks.add_task(workflow.generate, manifest.run_id, request.controls)
-    return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
 
 
 @router.post("/runs/{run_id}/chapter-script-cards/generate", response_model=CreateRunResponse)
@@ -348,8 +333,16 @@ def approve_chapter_script_card(
     store: RunStore = Depends(get_run_store),
 ) -> ChapterScriptReviewsResponse:
     try:
+        manifest = store.read_manifest(run_id)
+        _assert_manifest_status(
+            manifest.status,
+            {RunStatus.awaiting_script_review},
+            "Run is not awaiting chapter script review.",
+        )
         AdaptationWorkflow(settings, store).approve_chapter_script(run_id, chapter_id)
         return _chapter_script_reviews_response(run_id, store)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -364,8 +357,16 @@ def approve_all_chapter_script_cards(
     store: RunStore = Depends(get_run_store),
 ) -> ChapterScriptReviewsResponse:
     try:
+        manifest = store.read_manifest(run_id)
+        _assert_manifest_status(
+            manifest.status,
+            {RunStatus.awaiting_script_review},
+            "Run is not awaiting chapter script review.",
+        )
         AdaptationWorkflow(settings, store).approve_all_chapter_scripts(run_id)
         return _chapter_script_reviews_response(run_id, store)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -381,8 +382,17 @@ def regenerate_chapter_script_card(
     store: RunStore = Depends(get_run_store),
 ) -> ChapterScriptReviewsResponse:
     try:
-        AdaptationWorkflow(settings, store).regenerate_chapter_script(run_id, chapter_id)
+        manifest = store.read_manifest(run_id)
+        _assert_manifest_status(
+            manifest.status,
+            {RunStatus.awaiting_script_review},
+            "Run is not awaiting chapter script review.",
+        )
+        feedback = _latest_script_feedback(run_id, store, chapter_id)
+        AdaptationWorkflow(settings, store).regenerate_chapter_script(run_id, chapter_id, feedback)
         return _chapter_script_reviews_response(run_id, store)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -392,6 +402,7 @@ def chapter_script_chat_stream(
     run_id: str,
     chapter_id: str,
     request: ChapterChatRequest,
+    settings: Settings = Depends(get_settings),
     store: RunStore = Depends(get_run_store),
 ) -> StreamingResponse:
     try:
@@ -429,23 +440,21 @@ def chapter_script_chat_stream(
             created_at=now_iso(),
         ),
     )
+    chat_messages = _chat_messages_for_chapter(
+        run_id,
+        store,
+        chapter_id,
+        "chapter_script_chat_messages.json",
+    )
 
     def event_stream() -> Iterator[str]:
-        context = ToolContext(run_id=run_id, chapter_id=chapter_id)
-        tools = ToolRegistry().available_tools(context)
-        yield _sse("visible_thinking", {"content": "我正在对照本章简介卡、剧本卡和作者反馈。"})
-        yield _sse(
-            "tool_event",
-            {
-                "name": "tool_registry",
-                "status": "disabled",
-                "tools": [tool.__dict__ for tool in tools],
-            },
-        )
-        answer = (
-            f"我定位到 {item.chapter.title} 的剧本卡。当前这章的处理是：{item.script_card.summary} "
-            "如果你确认问题就在这一章，可以点“重写本章剧本卡”，我会带着你的不满意点只重写这一章，"
-            "其他章节剧本卡保持不变，然后再进入连贯性合成。"
+        yield _sse("visible_thinking", {"content": "我正在对照本章简介卡、剧本卡和你的反馈，整理可执行的重写方向。"})
+        answer = _chapter_script_discussion_answer(
+            settings,
+            item.chapter,
+            item.source_card,
+            item.script_card,
+            chat_messages,
         )
         chunks = [answer[index : index + 28] for index in range(0, len(answer), 28)]
         collected = ""
@@ -498,6 +507,11 @@ def continuity_merge(
 ) -> CreateRunResponse:
     try:
         manifest = store.read_manifest(run_id)
+        _assert_manifest_status(
+            manifest.status,
+            {RunStatus.awaiting_script_review},
+            "Run is not awaiting chapter script review.",
+        )
         _assert_script_reviews_approved(run_id, store)
         background_tasks.add_task(AdaptationWorkflow(settings, store).continuity_merge, manifest.run_id)
         return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
@@ -570,17 +584,7 @@ def final_feedback_chat_stream(
     _append_chat_message(run_id, store, user_message, "final_feedback_chat_messages.json")
 
     def event_stream() -> Iterator[str]:
-        context = ToolContext(run_id=run_id, chapter_id=feedback.target_chapter_id or "final")
-        tools = ToolRegistry().available_tools(context)
         yield _sse("visible_thinking", {"content": "我正在判断这是跨章连贯问题，还是某一章剧本卡需要返修。"})
-        yield _sse(
-            "tool_event",
-            {
-                "name": "tool_registry",
-                "status": "disabled",
-                "tools": [tool.__dict__ for tool in tools],
-            },
-        )
         if feedback.target_type == "continuity":
             answer = (
                 "我判断这更像连贯性问题：前面单章你已经通过，最终不满意主要发生在合成后的顺序、过渡、"
@@ -918,6 +922,174 @@ def _append_chat_message(
         messages = []
     messages.append(message.model_dump(mode="json"))
     store.write_json(run_id, artifact, messages)
+
+
+def _chat_messages_for_chapter(
+    run_id: str,
+    store: RunStore,
+    chapter_id: str,
+    artifact: str = "chapter_chat_messages.json",
+) -> list[ChapterChatMessage]:
+    try:
+        raw_messages = store.read_json(run_id, artifact)
+    except Exception:
+        return []
+    messages = []
+    for item in raw_messages:
+        try:
+            message = ChapterChatMessage.model_validate(item)
+        except Exception:
+            continue
+        if message.chapter_id == chapter_id:
+            messages.append(message)
+    return messages
+
+
+def _discussion_notes(
+    run_id: str,
+    store: RunStore,
+    chapter_id: str,
+    artifact: str,
+) -> str:
+    messages = _chat_messages_for_chapter(run_id, store, chapter_id, artifact)
+    if not messages:
+        return ""
+    lines = []
+    for message in messages[-10:]:
+        label = "作者" if message.role == "user" else "AI"
+        lines.append(f"{label}: {_compact_text(message.content, 360)}")
+    return "\n".join(lines)
+
+
+def _chapter_discussion_answer(
+    settings: Settings,
+    chapter: Chapter,
+    card: ChapterCard,
+    messages: list[ChapterChatMessage],
+) -> str:
+    latest_user = next((message.content for message in reversed(messages) if message.role == "user"), "")
+    client = LlmClient(settings)
+    if client.mock:
+        return (
+            f"我理解你是在确认《{chapter.title}》这张理解卡有没有读偏。"
+            f"当前卡片把本章概括为：{card.summary} "
+            f"你刚才提到的是：{latest_user or '还没有明确的不满点'}。"
+            "我建议先核对三件事：人物动机有没有被说准、关键线索有没有漏掉、心理描写是不是需要更具体地外化。"
+            "如果你确认问题点，我会把这段讨论作为重读提示，重新生成这一章理解卡。"
+        )
+    try:
+        return client.generate_text(
+            (
+                "你是小说改编副编剧，正在和作者讨论某一章的 AI 理解卡是否读准。"
+                "请像真实创作伙伴一样回应，不要机械重复按钮说明。"
+                "你需要先判断作者的不满可能指向哪里，再结合原文和当前理解卡给出具体分析。"
+                "如果作者表达不够明确，最多追问两个很具体的问题。"
+                "如果已经能判断问题，就提炼一段可用于重新理解本章的修改方向。"
+                "不要展示隐藏推理链，不要编造原文没有支持的信息，回复使用简体中文。"
+            ),
+            {
+                "chapter": {
+                    "chapter_id": f"ch_{chapter.index:03d}",
+                    "title": chapter.title,
+                    "text": chapter.text[:8000],
+                },
+                "current_chapter_card": card.model_dump(mode="json"),
+                "chat_history": [
+                    {
+                        "role": "作者" if message.role == "user" else "AI",
+                        "content": message.content,
+                    }
+                    for message in messages[-12:]
+                ],
+                "expected_output": (
+                    "给作者一段自然语言回复，说明你如何理解他的疑虑；"
+                    "指出本章理解卡可能需要校正的地方；必要时追问；"
+                    "最后用一句话说明确认后可以带着这段讨论重新理解。"
+                ),
+            },
+        )
+    except Exception as exc:
+        return (
+            "真实模型这次没有成功返回完整讨论回复，但我已经记录了你的反馈。"
+            f"当前可用于重读的疑虑是：{latest_user or str(exc)}"
+        )
+
+
+def _chapter_script_discussion_answer(
+    settings: Settings,
+    chapter: Chapter,
+    source_card: ChapterCard | None,
+    script_card: ChapterScriptCard,
+    messages: list[ChapterChatMessage],
+) -> str:
+    latest_user = next((message.content for message in reversed(messages) if message.role == "user"), "")
+    client = LlmClient(settings)
+    if client.mock:
+        return (
+            f"我理解你是在检查《{chapter.title}》这张剧本卡是否符合预期。"
+            f"当前剧本卡摘要是：{script_card.summary} "
+            f"你指出的问题是：{latest_user or '还没有明确的不满点'}。"
+            "我会优先判断问题属于对白、动作、冲突、人物动机还是前后衔接。"
+            "确认后点“重写本章剧本卡”，系统会只重写这一章，再回到连贯性合成。"
+        )
+    try:
+        return client.generate_text(
+            (
+                "你是小说改编副编剧，正在和作者讨论某一章剧本卡为什么不合适。"
+                "请不要只建议点击按钮，而要帮助作者定位问题：对白、动作、冲突、节奏、人物动机、"
+                "场景可拍性或前后衔接。"
+                "请结合章节原文、章节理解卡、当前剧本卡和聊天历史，给出可执行的重写方向。"
+                "如果定位不明确，最多追问两个具体问题。回复使用简体中文。"
+            ),
+            {
+                "chapter": {
+                    "chapter_id": f"ch_{chapter.index:03d}",
+                    "title": chapter.title,
+                    "text": chapter.text[:8000],
+                },
+                "chapter_card": source_card.model_dump(mode="json") if source_card else None,
+                "current_script_card": script_card.model_dump(mode="json"),
+                "chat_history": [
+                    {
+                        "role": "作者" if message.role == "user" else "AI",
+                        "content": message.content,
+                    }
+                    for message in messages[-12:]
+                ],
+            },
+        )
+    except Exception as exc:
+        return (
+            "真实模型这次没有成功返回完整讨论回复，但我已经记录了你的反馈。"
+            f"当前可用于重写的疑虑是：{latest_user or str(exc)}"
+        )
+
+
+def _latest_script_feedback(
+    run_id: str,
+    store: RunStore,
+    chapter_id: str,
+) -> ScriptFeedback | None:
+    try:
+        raw_feedbacks = store.read_json(run_id, "chapter_script_feedback.json")
+    except Exception:
+        return None
+    feedbacks = []
+    for item in raw_feedbacks:
+        try:
+            feedback = ScriptFeedback.model_validate(item)
+        except Exception:
+            continue
+        if feedback.target_chapter_id == chapter_id:
+            feedbacks.append(feedback)
+    return feedbacks[-1] if feedbacks else None
+
+
+def _compact_text(value: str, limit: int = 240) -> str:
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "..."
 
 
 def _append_script_feedback(

@@ -10,7 +10,7 @@ Upgrades Novel2Script from one-shot YAML generation into an AI adaptation co-wri
 
 Implementation approach:
 
-Adds Pydantic models for author controls and adaptation plans, introduces `/api/runs/intake` and `/api/runs/{run_id}/generate`, splits the LangGraph workflow into planning and generation phases, and keeps the old `/api/runs` endpoint as a compatibility one-shot flow. The frontend workbench is redesigned into three columns: input/control, AI adaptation plan, and YAML/report. Documentation and samples describe the AI co-writer positioning.
+Adds Pydantic models for author controls and adaptation plans, introduces `/api/runs/intake`, chapter-card review APIs, `/api/runs/{run_id}/build-plan`, and `/api/runs/{run_id}/chapter-script-cards/generate`. The old one-shot route is removed so the main flow is clearer: chapter cards first, then Story Bible, then per-chapter script cards, then continuity merge. The frontend workbench is redesigned around a Codex-style task flow with author checkpoints and artifacts opening only when they exist. Documentation and samples describe the AI co-writer positioning.
 
 Test method:
 

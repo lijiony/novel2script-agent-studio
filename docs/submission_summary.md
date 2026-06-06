@@ -20,16 +20,17 @@ TODO: replace with the narrated demo video URL after upload.
 
 ## Short Project Summary
 
-Novel2Script Agent Studio is a lightweight AI adaptation co-writer workbench. It first analyzes three or more chapters of novel text, produces an adaptation plan, and lets the author choose script format, style focus, adaptation scale, preserved content, forbidden changes, and notes. It then generates structured script JSON, validates the result with Pydantic and JSON Schema, exports YAML with `ruamel.yaml`, and returns a traceable adaptation report. The frontend provides a three-column Next.js workbench with planning output, author controls, Monaco YAML editing, validation feedback, and artifact downloads.
+Novel2Script Agent Studio is a lightweight AI adaptation co-writer workbench. It first analyzes three or more chapters of novel text, produces chapter understanding cards, and waits for the author to approve or regenerate them. Then it builds a Story Bible and adaptation plan, lets the author choose script format, style focus, adaptation scale, preserved content, forbidden changes, and notes, and generates per-chapter script cards for another review checkpoint. Only approved script cards are merged into structured script JSON, validated with Pydantic and JSON Schema, exported to YAML with `ruamel.yaml`, and returned with traceable reports. The frontend uses a Codex-style task workbench with chapter/script card review, chat feedback, Monaco YAML editing, validation feedback, and artifact downloads.
 
 ## Core Requirement Mapping
 
 | Requirement | Implementation |
 |---|---|
 | Accept 3+ chapters of novel text | Paste/upload `.txt`; backend rejects fewer than three chapters |
-| Plan before generation | `/api/runs/intake` generates `adaptation_plan.json/md` before script generation |
-| Author control | `/api/runs/{run_id}/generate` accepts format, scale, style, preserve, forbidden-change, and notes |
-| Convert novel to structured script | LangGraph pipeline generates structured `script.json` |
+| Chapter review before planning | `/api/runs/intake` generates chapter understanding cards and waits for author approval |
+| Plan before generation | `/api/runs/{run_id}/build-plan` generates Story Bible and `adaptation_plan.json/md` after approved chapter cards |
+| Author control | `/api/runs/{run_id}/chapter-script-cards/generate` accepts format, scale, style, preserve, forbidden-change, and notes |
+| Convert novel to structured script | LangGraph generates per-chapter script cards, then `continuity-merge` produces structured `script.json` |
 | Output YAML | Validated JSON is exported to `script.yaml` with `ruamel.yaml` |
 | Editable draft | Browser YAML editor supports edits and backend revalidation |
 | YAML Schema document | `docs/schema.md`, generated `schema.json`, and per-run `schema.md` |

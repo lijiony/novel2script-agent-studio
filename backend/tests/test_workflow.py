@@ -14,6 +14,19 @@ from app.graph.workflow import AdaptationWorkflow, _chapter_number_markers
 from app.services.run_store import RunStore
 
 
+def _complete_author_review_flow(
+    workflow: AdaptationWorkflow,
+    run_id: str,
+    controls: AuthorControls | None = None,
+) -> None:
+    workflow.intake(run_id)
+    workflow.approve_all_chapters(run_id)
+    workflow.build_plan(run_id)
+    workflow.generate(run_id, controls or AuthorControls())
+    workflow.approve_all_chapter_scripts(run_id)
+    workflow.continuity_merge(run_id)
+
+
 def test_mock_workflow_generates_artifacts(tmp_path):
     sample = """第一章 开始
 林夏收到第一封信。
@@ -29,7 +42,7 @@ def test_mock_workflow_generates_artifacts(tmp_path):
     manifest = store.create_run(sample)
     workflow = AdaptationWorkflow(settings, store)
 
-    workflow.run(manifest.run_id)
+    _complete_author_review_flow(workflow, manifest.run_id)
 
     final_manifest = store.read_manifest(manifest.run_id)
     assert final_manifest.status == RunStatus.awaiting_final_review
@@ -210,6 +223,65 @@ def test_mock_workflow_handles_many_chapters_without_chunking(tmp_path):
     assert plan.scene_plan[0].adaptation_reason
 
 
+def test_generation_scope_keeps_minimum_three_script_cards(tmp_path):
+    sample = """第一章 开始
+林夏收到第一封信。
+
+第二章 剧院
+林夏遇到周砚。
+
+第三章 台词
+林夏找到地址。
+"""
+    settings = Settings(USE_MOCK_LLM=True, RUNS_DIR=tmp_path)
+    store = RunStore(tmp_path)
+    manifest = store.create_run(sample)
+    workflow = AdaptationWorkflow(settings, store)
+
+    workflow.intake(manifest.run_id)
+    workflow.approve_all_chapters(manifest.run_id)
+    workflow.build_plan(manifest.run_id)
+
+    story_bible = store.read_json(manifest.run_id, "story_bible.json")
+    story_bible["recommended_generation_scope"] = [1, 3]
+    store.write_json(manifest.run_id, "story_bible.json", story_bible)
+
+    workflow.generate(manifest.run_id, AuthorControls())
+
+    script_cards = store.read_json(manifest.run_id, "chapter_script_cards.json")
+    assert [card["chapter_id"] for card in script_cards] == ["ch_001", "ch_002", "ch_003"]
+
+
+def test_script_reference_normalization_accepts_real_model_aliases(tmp_path):
+    settings = Settings(USE_MOCK_LLM=True, RUNS_DIR=tmp_path)
+    store = RunStore(tmp_path)
+    workflow = AdaptationWorkflow(settings, store)
+
+    scenes, characters, locations = workflow._normalize_script_references(  # noqa: SLF001
+        [
+            {
+                "source_chapters": [2],
+                "location_id": "城北钟楼",
+                "characters": ["林夏", "周砚"],
+                "dialogues": [
+                    {"speaker_id": "char_zhou_yan", "line": "别问了。"},
+                    {"speaker_id": "char_mother", "line": "别再查了。"},
+                ],
+            }
+        ]
+    )
+
+    assert scenes[0]["location_id"] == "loc_clocktower"
+    assert scenes[0]["characters"] == ["char_linxia", "char_zhouyan", "char_mother"]
+    assert scenes[0]["dialogues"][0]["speaker_id"] == "char_zhouyan"
+    assert {character["id"] for character in characters} >= {
+        "char_linxia",
+        "char_zhouyan",
+        "char_mother",
+    }
+    assert {location["id"] for location in locations} >= {"loc_clocktower"}
+
+
 def test_regenerate_chapter_only_updates_target_card(tmp_path):
     sample = """第一章 开始
 林夏收到第一封信。
@@ -252,7 +324,7 @@ def test_workflow_falls_back_to_mock_without_api_key(tmp_path):
     manifest = store.create_run(sample)
     workflow = AdaptationWorkflow(settings, store)
 
-    workflow.run(manifest.run_id)
+    _complete_author_review_flow(workflow, manifest.run_id)
 
     final_manifest = store.read_manifest(manifest.run_id)
     assert final_manifest.status == RunStatus.awaiting_final_review
@@ -310,7 +382,7 @@ def test_workflow_fails_when_repair_cannot_produce_valid_script(tmp_path):
 
     workflow._script_from_chapter_script_cards = invalid_semantic_script  # type: ignore[method-assign]
 
-    workflow.run(manifest.run_id)
+    _complete_author_review_flow(workflow, manifest.run_id)
 
     final_manifest = store.read_manifest(manifest.run_id)
     assert final_manifest.status == RunStatus.failed_validation
