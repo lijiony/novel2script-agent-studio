@@ -674,6 +674,15 @@ select:focus {
   background: #fff6f6;
 }
 
+.script-workbench {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.script-card {
+  background: #fffdf8;
+}
+
 .review-card-head {
   display: flex;
   justify-content: space-between;
@@ -753,6 +762,28 @@ select:focus {
 }
 
 .detail-list li {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.script-scene-preview {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  padding: 9px;
+}
+
+.script-scene-preview strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.script-scene-preview p,
+.script-scene-preview small {
+  margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
@@ -878,6 +909,14 @@ select:focus {
   border-left: 1px solid var(--line);
   background: #fbfcfa;
   box-shadow: -18px 0 38px rgba(31, 39, 35, 0.08);
+}
+
+.workspace-compact .chapter-chat-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 30;
+  width: min(440px, calc(100vw - 24px));
 }
 
 .chapter-chat-context {
@@ -1117,6 +1156,88 @@ select:focus {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.55;
+}
+
+.final-review-card {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffdf8;
+  padding: 12px;
+}
+
+.final-review-card span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.final-review-card strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.final-review-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.feedback-box,
+.feedback-chat-log {
+  display: grid;
+  gap: 10px;
+}
+
+.feedback-box textarea {
+  width: 100%;
+  min-height: 86px;
+  padding: 10px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.feedback-chat-log {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 10px;
+}
+
+.feedback-target-select {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.feedback-target-select span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.feedback-target-select select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px 10px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.feedback-target-select small {
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .download-grid {
