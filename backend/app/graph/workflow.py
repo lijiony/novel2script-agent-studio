@@ -127,7 +127,7 @@ class AdaptationWorkflow:
             if require_approved:
                 self._assert_run_status(
                     run_id,
-                    (RunStatus.awaiting_chapter_review,),
+                    (RunStatus.awaiting_chapter_review, RunStatus.planning),
                     "Run is not awaiting chapter review.",
                 )
             state = self._load_planning_state(run_id, require_approved=require_approved)
@@ -204,7 +204,7 @@ class AdaptationWorkflow:
         try:
             self._assert_run_status(
                 run_id,
-                (RunStatus.awaiting_chapter_review,),
+                (RunStatus.awaiting_chapter_review, RunStatus.regenerating_chapter),
                 "Run is not awaiting chapter review.",
             )
             chapters = [
@@ -300,16 +300,16 @@ class AdaptationWorkflow:
                 message=f"{chapter_id} regenerated.",
                 run_status=RunStatus.awaiting_chapter_review,
             )
-        except (WorkflowValidationError, LlmWorkflowError):
-            raise
+        except (WorkflowValidationError, LlmWorkflowError) as exc:
+            self._fail_chapter_review(run_id, chapter_id, str(exc))
         except Exception as exc:
-            raise WorkflowValidationError(str(exc)) from exc
+            self._fail_chapter_review(run_id, chapter_id, str(exc))
 
     def generate(self, run_id: str, controls: AuthorControls | dict[str, Any] | None = None) -> None:
         try:
             self._assert_run_status(
                 run_id,
-                (RunStatus.planned,),
+                (RunStatus.planned, RunStatus.generating_chapter_scripts),
                 "Run is not ready for chapter script generation.",
             )
             author_controls = AuthorControls.model_validate(controls or {})
@@ -387,7 +387,11 @@ class AdaptationWorkflow:
         try:
             self._assert_run_status(
                 run_id,
-                (RunStatus.awaiting_script_review, RunStatus.awaiting_final_review),
+                (
+                    RunStatus.awaiting_script_review,
+                    RunStatus.regenerating_chapter_script,
+                    RunStatus.awaiting_final_review,
+                ),
                 "Run is not ready for chapter script regeneration.",
             )
             feedback_model = (
@@ -502,10 +506,10 @@ class AdaptationWorkflow:
                 message=f"{chapter_id} script card regenerated.",
                 run_status=RunStatus.awaiting_script_review,
             )
-        except (WorkflowValidationError, LlmWorkflowError):
-            raise
+        except (WorkflowValidationError, LlmWorkflowError) as exc:
+            self._fail_chapter_script_review(run_id, chapter_id, str(exc))
         except Exception as exc:
-            raise WorkflowValidationError(str(exc)) from exc
+            self._fail_chapter_script_review(run_id, chapter_id, str(exc))
 
     def continuity_merge(self, run_id: str, feedback: ScriptFeedback | dict[str, Any] | None = None) -> None:
         try:
@@ -516,9 +520,9 @@ class AdaptationWorkflow:
             )
             self._assert_run_status(
                 run_id,
-                (RunStatus.awaiting_final_review,)
+                (RunStatus.awaiting_final_review, RunStatus.awaiting_script_review)
                 if feedback_model
-                else (RunStatus.awaiting_script_review,),
+                else (RunStatus.awaiting_script_review, RunStatus.merging_continuity),
                 "Run is not ready for continuity merge.",
             )
             self._assert_script_reviews_approved(run_id)
@@ -572,7 +576,13 @@ class AdaptationWorkflow:
         cards = self._read_chapter_script_cards(run_id)
         target_chapter_id: str | None = None
         target_scene_id: str | None = None
-        target_type = "continuity" if category == "continuity" else "chapter_script"
+        target_type = (
+            "continuity"
+            if category == "continuity"
+            else "chapter_and_continuity"
+            if category == "chapter_and_continuity"
+            else "chapter_script"
+        )
         if category != "continuity":
             target_chapter_id, target_scene_id = self._infer_feedback_target(complaint, cards)
         feedback = ScriptFeedback(
@@ -586,7 +596,15 @@ class AdaptationWorkflow:
             ai_assessment=(
                 "这是连贯性问题，建议保留已通过章节剧本卡，只重新做跨章衔接合成。"
                 if category == "continuity"
-                else f"我判断这个问题最可能落在 {target_chapter_id or '待确认章节'}，需要作者确认后只重写该章剧本卡。"
+                else (
+                    f"我判断这个问题最可能落在 {target_chapter_id or '待确认章节'}。"
+                    "系统会先重写该章剧本卡，再带着反馈自动重新做连贯性合成。"
+                )
+                if category == "chapter_and_continuity"
+                else (
+                    f"我判断这个问题最可能落在 {target_chapter_id or '待确认章节'}。"
+                    "系统会先重写该章剧本卡，再自动重新做连贯性合成。"
+                )
             ),
             created_at=now_iso(),
         )
@@ -627,6 +645,13 @@ class AdaptationWorkflow:
         feedbacks = [applied if item.id == feedback_id else item for item in feedbacks]
         self._write_feedback(run_id, feedbacks)
         self.regenerate_chapter_script(run_id, chapter_id, applied)
+        target_review = next(
+            (review for review in self._read_script_reviews(run_id) if review.chapter_id == chapter_id),
+            None,
+        )
+        if target_review and target_review.status == "ready":
+            self.approve_chapter_script(run_id, chapter_id)
+            self.continuity_merge(run_id, applied)
         return applied
 
     def _assert_final_review_ready(self, run_id: str) -> None:
@@ -765,6 +790,28 @@ class AdaptationWorkflow:
             [review.model_dump(mode="json") for review in reviews],
         )
 
+    def _fail_chapter_review(self, run_id: str, chapter_id: str, error: str) -> None:
+        try:
+            reviews = self._read_reviews(run_id)
+            reviews = [
+                review.model_copy(
+                    update={"status": "failed", "approved_at": None, "error": error}
+                )
+                if review.chapter_id == chapter_id
+                else review
+                for review in reviews
+            ]
+            self._write_reviews(run_id, reviews)
+            self.store.set_stage(
+                run_id,
+                "regenerate_chapter",
+                "failed",
+                message=error,
+                run_status=RunStatus.awaiting_chapter_review,
+            )
+        except Exception:
+            self.store.fail(run_id, RunStatus.failed_internal, error)
+
     def _read_script_reviews(self, run_id: str) -> list[ChapterScriptReview]:
         return [
             ChapterScriptReview.model_validate(item)
@@ -779,6 +826,28 @@ class AdaptationWorkflow:
             "chapter_script_reviews.json",
             [review.model_dump(mode="json") for review in reviews],
         )
+
+    def _fail_chapter_script_review(self, run_id: str, chapter_id: str, error: str) -> None:
+        try:
+            reviews = self._read_script_reviews(run_id)
+            reviews = [
+                review.model_copy(
+                    update={"status": "failed", "approved_at": None, "error": error}
+                )
+                if review.chapter_id == chapter_id
+                else review
+                for review in reviews
+            ]
+            self._write_script_reviews(run_id, reviews)
+            self.store.set_stage(
+                run_id,
+                "regenerate_chapter_script",
+                "failed",
+                message=error,
+                run_status=RunStatus.awaiting_script_review,
+            )
+        except Exception:
+            self.store.fail(run_id, RunStatus.failed_internal, error)
 
     def _read_chapter_script_cards(self, run_id: str) -> list[ChapterScriptCard]:
         return [
@@ -847,8 +916,18 @@ class AdaptationWorkflow:
             [card for card in chapter_cards if card.chapter_id in approved_ids],
             key=lambda item: item.chapter_index,
         )
+        approved_indexes = {card.chapter_index for card in approved_cards}
+        requested_scope = author_controls.generation_scope
+        unknown_scope = [
+            index for index in requested_scope if index not in approved_indexes
+        ]
+        if unknown_scope:
+            raise WorkflowValidationError(
+                f"Selected generation chapters are not approved or do not exist: {unknown_scope}."
+            )
         scope = set(
-            story_bible.recommended_generation_scope
+            requested_scope
+            or story_bible.recommended_generation_scope
             or adaptation_plan.recommended_generation_scope
             or [1, 2, 3]
         )
@@ -857,8 +936,12 @@ class AdaptationWorkflow:
             for card in approved_cards
             if card.chapter_index in scope
         ]
+        if not source_cards:
+            raise WorkflowValidationError(
+                "Select at least one approved chapter before generating script cards."
+            )
         min_card_count = min(3, len(approved_cards))
-        if len(source_cards) < min_card_count:
+        if not requested_scope and len(source_cards) < min_card_count:
             selected_ids = {card.chapter_id for card in source_cards}
             for card in approved_cards:
                 if card.chapter_id in selected_ids:

@@ -179,12 +179,19 @@ def test_final_feedback_can_rerun_continuity_or_single_chapter(tmp_path):
     assert after_point_reviews[0]["revision_count"] == before_reviews[0]["revision_count"]
     assert after_point_reviews[1]["revision_count"] == before_reviews[1]["revision_count"]
     assert after_point_reviews[2]["revision_count"] == before_reviews[2]["revision_count"] + 1
-    assert after_point_reviews[2]["status"] == "ready"
-    assert store.read_manifest(manifest.run_id).status == RunStatus.awaiting_script_review
-    assert "script.yaml" not in store.read_manifest(manifest.run_id).artifacts
+    assert after_point_reviews[2]["status"] == "approved"
+    assert store.read_manifest(manifest.run_id).status == RunStatus.awaiting_final_review
+    assert "script.yaml" in store.read_manifest(manifest.run_id).artifacts
 
-    workflow.approve_chapter_script(manifest.run_id, "ch_003")
-    workflow.continuity_merge(manifest.run_id)
+    mixed_feedback = workflow.create_final_feedback(
+        manifest.run_id,
+        "chapter_and_continuity",
+        "第三章对白太解释，第二章第三章之间过渡也不顺",
+        "先改第三章，再让章节过渡自然一些",
+    )
+    assert mixed_feedback.target_type == "chapter_and_continuity"
+    assert mixed_feedback.target_chapter_id in {"ch_002", "ch_003"}
+    workflow.apply_final_feedback(manifest.run_id, mixed_feedback.id, mixed_feedback.target_chapter_id)
     assert store.read_manifest(manifest.run_id).status == RunStatus.awaiting_final_review
     assert "script.yaml" in store.read_manifest(manifest.run_id).artifacts
 
@@ -223,7 +230,7 @@ def test_mock_workflow_handles_many_chapters_without_chunking(tmp_path):
     assert plan.scene_plan[0].adaptation_reason
 
 
-def test_generation_scope_keeps_minimum_three_script_cards(tmp_path):
+def test_author_generation_scope_controls_script_cards(tmp_path):
     sample = """第一章 开始
 林夏收到第一封信。
 
@@ -246,10 +253,10 @@ def test_generation_scope_keeps_minimum_three_script_cards(tmp_path):
     story_bible["recommended_generation_scope"] = [1, 3]
     store.write_json(manifest.run_id, "story_bible.json", story_bible)
 
-    workflow.generate(manifest.run_id, AuthorControls())
+    workflow.generate(manifest.run_id, AuthorControls(generation_scope=[1, 3]))
 
     script_cards = store.read_json(manifest.run_id, "chapter_script_cards.json")
-    assert [card["chapter_id"] for card in script_cards] == ["ch_001", "ch_002", "ch_003"]
+    assert [card["chapter_id"] for card in script_cards] == ["ch_001", "ch_003"]
 
 
 def test_script_reference_normalization_accepts_real_model_aliases(tmp_path):

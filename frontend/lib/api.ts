@@ -85,6 +85,7 @@ export type AuthorControls = {
   format_type: ScriptFormat;
   adaptation_scale: AdaptationScale;
   style_focus: StyleFocus;
+  generation_scope: number[];
   preserve_items: string[];
   forbidden_changes: string[];
   author_notes?: string | null;
@@ -204,7 +205,7 @@ export type ChapterScriptReviewsResponse = {
 export type FinalFeedback = {
   id: string;
   source: "chapter_script_chat" | "final_review";
-  target_type: "continuity" | "chapter_script" | "scene" | "dialogue" | "action" | "unknown";
+  target_type: "continuity" | "chapter_script" | "chapter_and_continuity" | "scene" | "dialogue" | "action" | "unknown";
   target_chapter_id?: string | null;
   target_scene_id?: string | null;
   complaint: string;
@@ -258,7 +259,7 @@ export async function intakeRun(text: string, file?: File | null): Promise<RunIn
     throw new Error(await errorText(response));
   }
   const result = await response.json();
-  return getRun(result.run_id);
+  return getRunWithRetry(result.run_id);
 }
 
 export async function generateRun(
@@ -276,7 +277,7 @@ export async function generateRun(
     throw new Error(await errorText(response));
   }
   const result = await response.json();
-  return getRun(result.run_id);
+  return getRunWithRetry(result.run_id);
 }
 
 export async function getChapterScriptReviews(runId: string): Promise<ChapterScriptReviewsResponse> {
@@ -325,7 +326,7 @@ export async function continuityMerge(runId: string): Promise<RunInfo> {
     throw new Error(await errorText(response));
   }
   const result = await response.json();
-  return getRun(result.run_id);
+  return getRunWithRetry(result.run_id);
 }
 
 export async function confirmFinalScript(runId: string): Promise<RunInfo> {
@@ -346,7 +347,7 @@ export async function buildPlan(runId: string): Promise<RunInfo> {
     throw new Error(await errorText(response));
   }
   const result = await response.json();
-  return getRun(result.run_id);
+  return getRunWithRetry(result.run_id);
 }
 
 export async function getChapterReviews(runId: string): Promise<ChapterReviewsResponse> {
@@ -411,7 +412,7 @@ export async function getChapterScriptChatMessages(
 
 export async function createFinalFeedback(
   runId: string,
-  category: "continuity" | "script_point",
+  category: "continuity" | "script_point" | "chapter_and_continuity",
   complaint: string,
   desiredChange: string,
 ): Promise<FinalFeedbackResponse> {
@@ -456,6 +457,23 @@ export async function getRun(runId: string): Promise<RunInfo> {
     throw new Error(await errorText(response));
   }
   return response.json();
+}
+
+async function getRunWithRetry(runId: string, attempts = 6): Promise<RunInfo> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await getRun(runId);
+    } catch (error) {
+      lastError = error;
+      await delay(250 + attempt * 150);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function getArtifact(runId: string, name: string): Promise<string> {
