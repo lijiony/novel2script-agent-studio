@@ -50,9 +50,21 @@ class AuthorControls(StrictBaseModel):
     format_type: ScriptFormat = ScriptFormat.short_drama
     adaptation_scale: AdaptationScale = AdaptationScale.balanced
     style_focus: StyleFocus = StyleFocus.psychological
+    generation_scope: list[int] = Field(
+        default_factory=list,
+        description="Source chapter indexes selected by the author for script-card generation.",
+    )
     preserve_items: list[str] = Field(default_factory=list)
     forbidden_changes: list[str] = Field(default_factory=list)
     author_notes: str | None = None
+
+    @model_validator(mode="after")
+    def generation_scope_is_positive_and_unique(self):
+        if any(index < 1 for index in self.generation_scope):
+            raise ValueError("generation_scope must contain positive chapter indexes.")
+        if len(self.generation_scope) != len(set(self.generation_scope)):
+            raise ValueError("generation_scope must not contain duplicates.")
+        return self
 
 
 class Character(StrictBaseModel):
@@ -277,7 +289,15 @@ class ChapterChatMessagesResponse(StrictBaseModel):
 class ScriptFeedback(StrictBaseModel):
     id: str
     source: Literal["chapter_script_chat", "final_review"] = "final_review"
-    target_type: Literal["continuity", "chapter_script", "scene", "dialogue", "action", "unknown"]
+    target_type: Literal[
+        "continuity",
+        "chapter_script",
+        "chapter_and_continuity",
+        "scene",
+        "dialogue",
+        "action",
+        "unknown",
+    ]
     target_chapter_id: str | None = Field(default=None, pattern=r"^ch_[0-9]{3}$")
     target_scene_id: str | None = Field(default=None, pattern=r"^sc_[0-9]{3}$")
     complaint: str = Field(..., min_length=1)
@@ -289,7 +309,7 @@ class ScriptFeedback(StrictBaseModel):
 
 
 class FinalFeedbackRequest(StrictBaseModel):
-    category: Literal["continuity", "script_point"]
+    category: Literal["continuity", "script_point", "chapter_and_continuity"]
     complaint: str = Field(..., min_length=1)
     desired_change: str = ""
 

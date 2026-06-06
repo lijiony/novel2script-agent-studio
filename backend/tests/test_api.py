@@ -18,6 +18,11 @@ SAMPLE_TEXT = """第一章 开始
 林夏找到地址。
 """
 
+SIX_CHAPTER_TEXT = "\n\n".join(
+    f"第{index}章 线索{index}\n林夏在第{index}个地点发现父亲留下的线索，周砚提醒她继续追查。"
+    for index in range(1, 7)
+)
+
 
 def _client_with_store(tmp_path):
     settings = Settings(
@@ -172,6 +177,7 @@ def test_generate_uses_author_controls_after_intake(tmp_path):
         build = client.post(f"/api/runs/{run_id}/build-plan")
         assert build.status_code == 200
         assert store.read_manifest(run_id).status == RunStatus.planned
+        assert client.post(f"/api/runs/{run_id}/build-plan").status_code == 200
 
         response = client.post(
             f"/api/runs/{run_id}/chapter-script-cards/generate",
@@ -188,6 +194,10 @@ def test_generate_uses_author_controls_after_intake(tmp_path):
         )
 
         assert response.status_code == 200
+        assert client.post(
+            f"/api/runs/{run_id}/chapter-script-cards/generate",
+            json={"controls": {}},
+        ).status_code == 200
         manifest = store.read_manifest(run_id)
         assert manifest.status == RunStatus.awaiting_script_review
         assert "chapter_script_cards.json" in manifest.artifacts
@@ -215,7 +225,44 @@ def test_generate_uses_author_controls_after_intake(tmp_path):
         assert client.post(f"/api/runs/{run_id}/build-plan").status_code == 409
         assert client.post(f"/api/runs/{run_id}/chapter-cards/approve-all").status_code == 409
         assert client.post(f"/api/runs/{run_id}/chapter-script-cards/approve-all").status_code == 409
-        assert client.post(f"/api/runs/{run_id}/continuity-merge").status_code == 409
+        repeat_merge = client.post(f"/api/runs/{run_id}/continuity-merge")
+        assert repeat_merge.status_code == 200
+        assert repeat_merge.json()["status"] == RunStatus.awaiting_final_review.value
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_generate_api_respects_author_generation_scope(tmp_path):
+    client, store = _client_with_store(tmp_path)
+    try:
+        intake = client.post("/api/runs/intake", data={"text": SIX_CHAPTER_TEXT})
+        run_id = intake.json()["run_id"]
+        client.post(f"/api/runs/{run_id}/chapter-cards/approve-all")
+        client.post(f"/api/runs/{run_id}/build-plan")
+
+        response = client.post(
+            f"/api/runs/{run_id}/chapter-script-cards/generate",
+            json={"controls": {"generation_scope": [1, 3, 5]}},
+        )
+
+        assert response.status_code == 200
+        reviews = client.get(f"/api/runs/{run_id}/chapter-script-reviews")
+        assert reviews.status_code == 200
+        assert [
+            item["review"]["chapter_id"]
+            for item in reviews.json()["items"]
+        ] == ["ch_001", "ch_003", "ch_005"]
+
+        second = client.post("/api/runs/intake", data={"text": SIX_CHAPTER_TEXT})
+        second_run_id = second.json()["run_id"]
+        client.post(f"/api/runs/{second_run_id}/chapter-cards/approve-all")
+        client.post(f"/api/runs/{second_run_id}/build-plan")
+        blocked = client.post(
+            f"/api/runs/{second_run_id}/chapter-script-cards/generate",
+            json={"controls": {"generation_scope": [1, 99]}},
+        )
+        assert blocked.status_code == 409
+        assert store.read_manifest(second_run_id).status == RunStatus.planned
     finally:
         app.dependency_overrides.clear()
 
@@ -286,6 +333,7 @@ def test_chapter_script_chat_and_final_feedback_stream(tmp_path):
         body = feedback_stream.text
         assert "final_feedback" in body
         assert "assistant_delta" in body
+        assert "我判断这更像具体剧本点问题" in body
         assert "sk-" not in body
         assert len(store.read_json(run_id, "final_feedback_chat_messages.json")) >= 2
     finally:
@@ -345,15 +393,35 @@ def test_final_feedback_apply_requires_author_confirmation_and_final_confirm(tmp
         assert apply.status_code == 200
         manifest = store.read_manifest(run_id)
         after_reviews = store.read_json(run_id, "chapter_script_reviews.json")
-        assert manifest.status == RunStatus.awaiting_script_review
+        assert manifest.status == RunStatus.awaiting_final_review
         assert after_reviews[0]["revision_count"] == before_reviews[0]["revision_count"]
         assert after_reviews[1]["revision_count"] == before_reviews[1]["revision_count"]
         assert after_reviews[2]["revision_count"] == before_reviews[2]["revision_count"] + 1
-        assert after_reviews[2]["status"] == "ready"
-        assert "script.yaml" not in manifest.artifacts
+        assert after_reviews[2]["status"] == "approved"
+        assert "script.yaml" in manifest.artifacts
 
-        client.post(f"/api/runs/{run_id}/chapter-script-cards/ch_003/approve")
-        client.post(f"/api/runs/{run_id}/continuity-merge")
+        mixed_feedback = client.post(
+            f"/api/runs/{run_id}/final-feedback",
+            json={
+                "category": "chapter_and_continuity",
+                "complaint": "第三章对白太解释，第二章第三章过渡也不顺",
+                "desired_change": "先减少第三章解释，再让第二章自然接到第三章",
+            },
+        )
+        assert mixed_feedback.status_code == 200
+        assert mixed_feedback.json()["feedback"]["target_type"] == "chapter_and_continuity"
+        mixed_target = mixed_feedback.json()["suggested_chapter_id"]
+        assert mixed_target in {"ch_002", "ch_003"}
+        mixed_feedback_id = mixed_feedback.json()["feedback"]["id"]
+        mixed_apply = client.post(
+            f"/api/runs/{run_id}/final-feedback/{mixed_feedback_id}/apply",
+            json={"confirmed_chapter_id": mixed_target},
+        )
+        assert mixed_apply.status_code == 200
+        manifest = store.read_manifest(run_id)
+        assert manifest.status == RunStatus.awaiting_final_review
+        assert "script.yaml" in manifest.artifacts
+
         confirm = client.post(f"/api/runs/{run_id}/final-confirm")
         assert confirm.status_code == 200
         assert confirm.json()["status"] == "succeeded"

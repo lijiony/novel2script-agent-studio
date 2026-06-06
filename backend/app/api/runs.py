@@ -53,6 +53,58 @@ def _assert_manifest_status(
         raise HTTPException(status_code=409, detail=detail)
 
 
+def _mark_chapter_review_regenerating(
+    run_id: str,
+    store: RunStore,
+    chapter_id: str,
+) -> None:
+    reviews = [
+        ChapterReview.model_validate(item)
+        for item in store.read_json(run_id, "chapter_reviews.json")
+    ]
+    if chapter_id not in {review.chapter_id for review in reviews}:
+        raise HTTPException(status_code=404, detail="Chapter review not found.")
+    next_reviews = [
+        review.model_copy(
+            update={"status": "regenerating", "approved_at": None, "error": None}
+        )
+        if review.chapter_id == chapter_id
+        else review
+        for review in reviews
+    ]
+    store.write_json(
+        run_id,
+        "chapter_reviews.json",
+        [review.model_dump(mode="json") for review in next_reviews],
+    )
+
+
+def _mark_chapter_script_review_regenerating(
+    run_id: str,
+    store: RunStore,
+    chapter_id: str,
+) -> None:
+    reviews = [
+        ChapterScriptReview.model_validate(item)
+        for item in store.read_json(run_id, "chapter_script_reviews.json")
+    ]
+    if chapter_id not in {review.chapter_id for review in reviews}:
+        raise HTTPException(status_code=404, detail="Chapter script review not found.")
+    next_reviews = [
+        review.model_copy(
+            update={"status": "regenerating", "approved_at": None, "error": None}
+        )
+        if review.chapter_id == chapter_id
+        else review
+        for review in reviews
+    ]
+    store.write_json(
+        run_id,
+        "chapter_script_reviews.json",
+        [review.model_dump(mode="json") for review in next_reviews],
+    )
+
+
 @router.get("/runs", response_model=RunListResponse)
 def list_runs(store: RunStore = Depends(get_run_store)) -> RunListResponse:
     items = []
@@ -173,6 +225,14 @@ def regenerate_chapter_card(
             "Run is not awaiting chapter review.",
         )
         feedback_notes = _discussion_notes(run_id, store, chapter_id, "chapter_chat_messages.json")
+        _mark_chapter_review_regenerating(run_id, store, chapter_id)
+        store.set_stage(
+            run_id,
+            "regenerate_chapter",
+            "running",
+            message=f"Regenerating {chapter_id}.",
+            run_status=RunStatus.regenerating_chapter,
+        )
         background_tasks.add_task(
             AdaptationWorkflow(settings, store).regenerate_chapter,
             run_id,
@@ -195,12 +255,21 @@ def build_plan(
 ) -> CreateRunResponse:
     try:
         manifest = store.read_manifest(run_id)
+        if manifest.status in {RunStatus.planning, RunStatus.planned}:
+            return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
         _assert_manifest_status(
             manifest.status,
             {RunStatus.awaiting_chapter_review},
             "Run is not awaiting chapter review.",
         )
         _assert_reviews_approved(run_id, store)
+        manifest = store.set_stage(
+            run_id,
+            "build_story_bible",
+            "running",
+            message="Building Story Bible from approved chapter cards.",
+            run_status=RunStatus.planning,
+        )
         background_tasks.add_task(AdaptationWorkflow(settings, store).build_plan, manifest.run_id)
         return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
     except HTTPException:
@@ -297,9 +366,20 @@ def generate_chapter_script_cards(
         manifest = store.read_manifest(run_id)
     except Exception as exc:
         raise HTTPException(status_code=404, detail="Run not found.") from exc
+    if manifest.status in {RunStatus.generating_chapter_scripts, RunStatus.awaiting_script_review}:
+        return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
     if manifest.status != RunStatus.planned:
         raise HTTPException(status_code=409, detail="Run must be planned before chapter script generation.")
+    if request and request.controls.generation_scope:
+        _assert_generation_scope_approved(run_id, store, request.controls.generation_scope)
     workflow = AdaptationWorkflow(settings, store)
+    manifest = store.set_stage(
+        run_id,
+        "generate_chapter_script_cards",
+        "running",
+        message="Generating chapter script cards from the selected chapter scope.",
+        run_status=RunStatus.generating_chapter_scripts,
+    )
     background_tasks.add_task(
         workflow.generate,
         manifest.run_id,
@@ -378,6 +458,7 @@ def approve_all_chapter_script_cards(
 def regenerate_chapter_script_card(
     run_id: str,
     chapter_id: str,
+    background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
     store: RunStore = Depends(get_run_store),
 ) -> ChapterScriptReviewsResponse:
@@ -389,7 +470,20 @@ def regenerate_chapter_script_card(
             "Run is not awaiting chapter script review.",
         )
         feedback = _latest_script_feedback(run_id, store, chapter_id)
-        AdaptationWorkflow(settings, store).regenerate_chapter_script(run_id, chapter_id, feedback)
+        _mark_chapter_script_review_regenerating(run_id, store, chapter_id)
+        store.set_stage(
+            run_id,
+            "regenerate_chapter_script",
+            "running",
+            message=f"Regenerating script card {chapter_id}.",
+            run_status=RunStatus.regenerating_chapter_script,
+        )
+        background_tasks.add_task(
+            AdaptationWorkflow(settings, store).regenerate_chapter_script,
+            run_id,
+            chapter_id,
+            feedback,
+        )
         return _chapter_script_reviews_response(run_id, store)
     except HTTPException:
         raise
@@ -507,12 +601,21 @@ def continuity_merge(
 ) -> CreateRunResponse:
     try:
         manifest = store.read_manifest(run_id)
+        if manifest.status in {RunStatus.merging_continuity, RunStatus.awaiting_final_review}:
+            return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
         _assert_manifest_status(
             manifest.status,
             {RunStatus.awaiting_script_review},
             "Run is not awaiting chapter script review.",
         )
         _assert_script_reviews_approved(run_id, store)
+        manifest = store.set_stage(
+            manifest.run_id,
+            "continuity_merge",
+            "running",
+            message="Merging approved chapter script cards into one coherent script.",
+            run_status=RunStatus.merging_continuity,
+        )
         background_tasks.add_task(AdaptationWorkflow(settings, store).continuity_merge, manifest.run_id)
         return CreateRunResponse(run_id=manifest.run_id, status=manifest.status)
     except HTTPException:
@@ -590,11 +693,17 @@ def final_feedback_chat_stream(
                 "我判断这更像连贯性问题：前面单章你已经通过，最终不满意主要发生在合成后的顺序、过渡、"
                 "人物动机承接或线索节奏上。建议保留每章剧本卡，只从连贯性合成阶段恢复，带上你的反馈重新合成。"
             )
+        elif feedback.target_type == "chapter_and_continuity":
+            answer = (
+                f"我判断这是章节剧本卡和连贯性都要调整的问题，最可能先落在 {feedback.target_chapter_id or '某一章'}"
+                f"{' / ' + feedback.target_scene_id if feedback.target_scene_id else ''}。"
+                "我会先带着你的反馈重写该章剧本卡，再自动重新做连贯性合成，避免只改单章后前后仍然不顺。"
+            )
         else:
             answer = (
                 f"我判断这更像具体剧本点问题，最可能对应 {feedback.target_chapter_id or '某一章'}"
                 f"{' / ' + feedback.target_scene_id if feedback.target_scene_id else ''}。"
-                "建议你先确认定位是否准确；确认后我只重写这一章剧本卡，其他章节保持不变，再重新做连贯性合成。"
+                "我会先重写这一章剧本卡，其他章节保持不变，再自动重新做连贯性合成。"
             )
         if request.desired_change:
             answer += f" 我会把你的调整方向记入返修提示：{request.desired_change}"
@@ -678,7 +787,7 @@ def apply_final_feedback(
             message=(
                 "已开始带着反馈重新做连贯性合成。"
                 if feedback.target_type == "continuity"
-                else "已开始重写已确认的章节剧本卡，完成后请重新通过该章，再做连贯性合成。"
+                else "已开始重写目标章节剧本卡，完成后会自动重新做连贯性合成。"
             ),
         )
     except HTTPException:
@@ -879,6 +988,25 @@ def _assert_reviews_approved(run_id: str, store: RunStore) -> None:
         raise HTTPException(
             status_code=409,
             detail="All chapter cards must be approved before building the adaptation plan.",
+        )
+
+
+def _assert_generation_scope_approved(
+    run_id: str,
+    store: RunStore,
+    generation_scope: list[int],
+) -> None:
+    reviews = _chapter_reviews_response(run_id, store)
+    approved_indexes = {
+        item.chapter.index
+        for item in reviews.items
+        if item.review.status == "approved" and item.card is not None
+    }
+    blocked = [index for index in generation_scope if index not in approved_indexes]
+    if blocked:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Selected chapters are not approved or do not exist: {blocked}.",
         )
 
 
