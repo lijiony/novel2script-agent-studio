@@ -132,6 +132,11 @@ npx playwright install chromium
 npx playwright test
 ```
 
+## Iteration And PR Standard
+
+This project follows the XEngineer iteration record requirement: keep meaningful commits, use small single-purpose PRs, and describe daily progress in every PR body.
+See `docs/iteration_guidelines.md` for the commit, branch, PR, and merge checklist.
+
 Submission readiness precheck:
 
 ```powershell

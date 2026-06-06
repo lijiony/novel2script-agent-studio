@@ -1,3 +1,9 @@
+## 本日进展
+
+- 完成：
+- 调整：
+- 待继续：
+
 ## Feature Description
 
 Describe what this PR adds or changes and how a reviewer can use it.
@@ -17,3 +23,4 @@ Describe the main technical decisions, modules touched, and any tradeoffs.
 - [ ] Main branch remains runnable after merge.
 - [ ] README or docs updated if behavior changed.
 - [ ] No database or persistent user data added.
+- [ ] Daily progress is described in this PR.
