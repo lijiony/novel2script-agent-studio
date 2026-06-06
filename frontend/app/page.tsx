@@ -9,32 +9,43 @@ import {
   AuthorControls,
   ChapterCard,
   ChapterReviewItem,
+  ChapterScriptReviewItem,
+  FinalFeedbackResponse,
   LlmStatus,
   LlmTestResult,
   RunListItem,
   RunInfo,
   ValidationReport,
+  applyFinalFeedback,
   approveAllChapters,
+  approveAllChapterScripts,
   approveChapter,
+  approveChapterScript,
   artifactUrl,
   buildPlan,
+  confirmFinalScript,
+  continuityMerge,
   generateRun,
   getArtifact,
   getChapterChatMessages,
   getChapterReviews,
+  getChapterScriptChatMessages,
+  getChapterScriptReviews,
   getLlmStatus,
   getRun,
   getScriptSchema,
   intakeRun,
   listRuns,
   regenerateChapter,
+  regenerateChapterScript,
   testLlmConnection,
   validateYaml,
 } from "@/lib/api";
 
-type ArtifactPanel = "chapterCards" | "storyBible" | "yaml" | "report" | "downloads" | "details";
+type ArtifactPanel = "chapterCards" | "chapterScripts" | "storyBible" | "yaml" | "report" | "downloads" | "details";
 type ConversationPhase = "idle" | "analyzing" | "reviewing" | "planned" | "generating" | "completed" | "failed";
 type ReviewFilter = "all" | "pending" | "attention";
+type ChatMode = "chapter" | "script";
 
 type StoryBible = {
   main_plot: string;
@@ -103,7 +114,7 @@ const sampleText = `第一章 雨巷里的信
 
 林夏翻开旧剧本，发现第三幕的台词被人用铅笔改过。每一句台词的第一个字连起来，是城北钟楼的地址。她意识到父亲留下的不是谜题，而是一条求救路线。`;
 
-const terminalStatuses = new Set(["succeeded", "failed_validation", "failed_llm", "failed_internal"]);
+const terminalStatuses = new Set(["succeeded", "awaiting_final_review", "failed_validation", "failed_llm", "failed_internal"]);
 
 const defaultControls: AuthorControls = {
   format_type: "short_drama",
@@ -142,7 +153,8 @@ const stepLabels = [
   "小说输入",
   "章节确认",
   "作者确认",
-  "剧本生成",
+  "剧本卡确认",
+  "连贯性合成",
   "YAML 打磨",
 ];
 
@@ -156,10 +168,15 @@ export default function Home() {
   const [adaptationPlan, setAdaptationPlan] = useState<AdaptationPlan | null>(null);
   const [chapterCards, setChapterCards] = useState<ChapterCard[]>([]);
   const [chapterReviews, setChapterReviews] = useState<ChapterReviewItem[]>([]);
+  const [chapterScriptReviews, setChapterScriptReviews] = useState<ChapterScriptReviewItem[]>([]);
   const [reviewsExpanded, setReviewsExpanded] = useState(false);
+  const [scriptReviewsExpanded, setScriptReviewsExpanded] = useState(false);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  const [scriptReviewFilter, setScriptReviewFilter] = useState<ReviewFilter>("all");
   const [openChapterId, setOpenChapterId] = useState<string | null>(null);
+  const [openScriptChapterId, setOpenScriptChapterId] = useState<string | null>(null);
   const [chatChapterId, setChatChapterId] = useState<string | null>(null);
+  const [chatMode, setChatMode] = useState<ChatMode>("chapter");
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
   const [assistantDraft, setAssistantDraft] = useState("");
@@ -171,6 +188,16 @@ export default function Home() {
   const [yamlText, setYamlText] = useState("");
   const [reportMarkdown, setReportMarkdown] = useState("");
   const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
+  const [finalFeedbackOpen, setFinalFeedbackOpen] = useState(false);
+  const [finalFeedbackCategory, setFinalFeedbackCategory] = useState<"continuity" | "script_point">("continuity");
+  const [finalFeedbackText, setFinalFeedbackText] = useState("");
+  const [finalFeedbackDesired, setFinalFeedbackDesired] = useState("");
+  const [finalFeedbackResult, setFinalFeedbackResult] = useState<FinalFeedbackResponse | null>(null);
+  const [finalFeedbackChapterId, setFinalFeedbackChapterId] = useState<string | null>(null);
+  const [finalFeedbackApplying, setFinalFeedbackApplying] = useState(false);
+  const [finalFeedbackMessages, setFinalFeedbackMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [finalFeedbackDraft, setFinalFeedbackDraft] = useState("");
+  const [finalFeedbackThinking, setFinalFeedbackThinking] = useState("");
   const [schema, setSchema] = useState<Record<string, unknown> | null>(null);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [llmTestResult, setLlmTestResult] = useState<LlmTestResult | null>(null);
@@ -182,23 +209,26 @@ export default function Home() {
 
   const allChaptersApproved = chapterReviews.length > 0
     && chapterReviews.every((item) => item.review.status === "approved" && item.card);
+  const allScriptsApproved = chapterScriptReviews.length > 0
+    && chapterScriptReviews.every((item) => item.review.status === "approved" && item.script_card);
   const canBuildPlan = Boolean(run?.run_id && run.status === "awaiting_chapter_review" && allChaptersApproved);
   const canGenerate = Boolean(run?.run_id && run.status === "planned");
+  const canContinuityMerge = Boolean(run?.run_id && run.status === "awaiting_script_review" && allScriptsApproved);
   const canValidate = Boolean(run?.run_id && yamlText.trim());
   const isPolling = Boolean(
     run
       && (
-        (!terminalStatuses.has(run.status) && !["awaiting_chapter_review", "planned"].includes(run.status))
+        (!terminalStatuses.has(run.status) && !["awaiting_chapter_review", "planned", "awaiting_script_review"].includes(run.status))
         || generationRequested
       ),
   );
   const phase = getConversationPhase(run, isPolling, generationRequested, error, yamlText);
   const fallbackPlan = useMemo(() => parsePlanMarkdown(planMarkdown), [planMarkdown]);
-  const hasArtifacts = Boolean(run?.artifacts.length);
   const completed = phase === "completed";
   const totalChapterChars = chapterCards.reduce((sum, card) => sum + card.char_count, 0);
   const activeChatChapter = chapterReviews.find((item) => item.review.chapter_id === chatChapterId) ?? null;
-  const sidePanelOpen = Boolean(chatChapterId || activeArtifactPanel);
+  const activeScriptChatChapter = chapterScriptReviews.find((item) => item.review.chapter_id === chatChapterId) ?? null;
+  const artifactPanelOpen = Boolean(activeArtifactPanel);
 
   useEffect(() => {
     getScriptSchema()
@@ -224,14 +254,26 @@ export default function Home() {
         ) {
           await loadChapterReviewState(nextRun.run_id);
         }
+        if (
+          nextRun.status === "generating_chapter_scripts"
+          || nextRun.status === "awaiting_script_review"
+          || nextRun.status === "regenerating_chapter_script"
+        ) {
+          await loadChapterScriptReviewState(nextRun.run_id);
+        }
         if (nextRun.status === "planned") {
           await loadPlanningArtifacts(nextRun.run_id);
           setGenerationRequested(false);
         }
-        if (nextRun.status === "succeeded") {
+        if (nextRun.status === "awaiting_script_review") {
+          setGenerationRequested(false);
+          setFinalFeedbackApplying(false);
+        }
+        if (nextRun.status === "succeeded" || nextRun.status === "awaiting_final_review") {
           await loadFinalArtifacts(nextRun.run_id);
           setActiveArtifactPanel("yaml");
           setGenerationRequested(false);
+          setFinalFeedbackApplying(false);
         }
       } catch (nextError) {
         setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -278,6 +320,12 @@ export default function Home() {
       "adaptation_plan.json",
       "adaptation_plan.md",
       "author_controls.json",
+      "chapter_script_cards.json",
+      "chapter_script_reviews.json",
+      "chapter_script_feedback.json",
+      "chapter_script_chat_messages.json",
+      "final_feedback_chat_messages.json",
+      "continuity_report.md",
     ].filter((artifact) => run.artifacts.includes(artifact));
     const deliverableArtifacts = [
       "script.json",
@@ -303,10 +351,15 @@ export default function Home() {
     setAdaptationPlan(null);
     setChapterCards([]);
     setChapterReviews([]);
+    setChapterScriptReviews([]);
     setReviewsExpanded(false);
+    setScriptReviewsExpanded(false);
     setReviewFilter("all");
+    setScriptReviewFilter("all");
     setOpenChapterId(null);
+    setOpenScriptChapterId(null);
     setChatChapterId(null);
+    setChatMode("chapter");
     setChatMessages([]);
     setAssistantDraft("");
     setVisibleThinking("");
@@ -317,6 +370,15 @@ export default function Home() {
     setYamlText("");
     setReportMarkdown("");
     setValidationReport(null);
+    setFinalFeedbackOpen(false);
+    setFinalFeedbackText("");
+    setFinalFeedbackDesired("");
+    setFinalFeedbackResult(null);
+    setFinalFeedbackChapterId(null);
+    setFinalFeedbackApplying(false);
+    setFinalFeedbackMessages([]);
+    setFinalFeedbackDraft("");
+    setFinalFeedbackThinking("");
     setActiveArtifactPanel(null);
     setGenerationRequested(false);
     setError(null);
@@ -335,6 +397,11 @@ export default function Home() {
     const response = await getChapterReviews(runId);
     setChapterReviews(response.items);
     setChapterCards(response.items.flatMap((item) => (item.card ? [item.card] : [])));
+  }
+
+  async function loadChapterScriptReviewState(runId: string) {
+    const response = await getChapterScriptReviews(runId);
+    setChapterScriptReviews(response.items);
   }
 
   async function loadRunTask(runId: string) {
@@ -356,6 +423,16 @@ export default function Home() {
       setYamlText("");
       setReportMarkdown("");
       setValidationReport(null);
+      setChapterScriptReviews([]);
+      setFinalFeedbackOpen(false);
+      setFinalFeedbackText("");
+      setFinalFeedbackDesired("");
+      setFinalFeedbackResult(null);
+      setFinalFeedbackChapterId(null);
+      setFinalFeedbackApplying(false);
+      setFinalFeedbackMessages([]);
+      setFinalFeedbackDraft("");
+      setFinalFeedbackThinking("");
       if (
         nextRun.artifacts.includes("chapter_reviews.json")
         || nextRun.artifacts.includes("chapter_cards.json")
@@ -367,6 +444,12 @@ export default function Home() {
       }
       if (nextRun.artifacts.includes("adaptation_plan.json")) {
         await loadPlanningArtifacts(nextRun.run_id);
+      }
+      if (
+        nextRun.artifacts.includes("chapter_script_reviews.json")
+        || nextRun.artifacts.includes("chapter_script_cards.json")
+      ) {
+        await loadChapterScriptReviewState(nextRun.run_id);
       }
       if (nextRun.artifacts.includes("script.yaml")) {
         await loadFinalArtifacts(nextRun.run_id);
@@ -389,6 +472,13 @@ export default function Home() {
     setActiveArtifactPanel(panel);
   }
 
+  function clearFinalFeedbackDiagnosis() {
+    setFinalFeedbackResult(null);
+    setFinalFeedbackChapterId(null);
+    setFinalFeedbackDraft("");
+    setFinalFeedbackThinking("");
+  }
+
   async function handleIntake() {
     setBusy(true);
     setError(null);
@@ -396,8 +486,11 @@ export default function Home() {
     setAdaptationPlan(null);
     setChapterCards([]);
     setChapterReviews([]);
+    setChapterScriptReviews([]);
     setOpenChapterId(null);
+    setOpenScriptChapterId(null);
     setChatChapterId(null);
+    setChatMode("chapter");
     setChatMessages([]);
     setAssistantDraft("");
     setVisibleThinking("");
@@ -408,6 +501,10 @@ export default function Home() {
     setYamlText("");
     setReportMarkdown("");
     setValidationReport(null);
+    setFinalFeedbackOpen(false);
+    setFinalFeedbackText("");
+    setFinalFeedbackDesired("");
+    setFinalFeedbackResult(null);
     setActiveArtifactPanel(null);
     setGenerationRequested(false);
     try {
@@ -429,7 +526,7 @@ export default function Home() {
   }
 
   async function handleApproveChapter(chapterId: string) {
-    if (!run) {
+    if (!run || busy) {
       return;
     }
     setBusy(true);
@@ -463,7 +560,7 @@ export default function Home() {
   }
 
   async function handleRegenerateChapter(chapterId: string) {
-    if (!run) {
+    if (!run || busy) {
       return;
     }
     setBusy(true);
@@ -473,6 +570,8 @@ export default function Home() {
       setAdaptationPlan(null);
       setStoryBible(null);
       setStoryBibleMarkdown("");
+      setChapterScriptReviews([]);
+      setOpenScriptChapterId(null);
       setYamlText("");
       setReportMarkdown("");
       setValidationReport(null);
@@ -514,6 +613,7 @@ export default function Home() {
       return;
     }
     setChatChapterId(chapterId);
+    setChatMode("chapter");
     setActiveArtifactPanel(null);
     setAssistantDraft("");
     setVisibleThinking("");
@@ -529,8 +629,29 @@ export default function Home() {
     }
   }
 
+  async function handleOpenScriptChat(chapterId: string) {
+    if (!run) {
+      return;
+    }
+    setChatChapterId(chapterId);
+    setChatMode("script");
+    setActiveArtifactPanel(null);
+    setAssistantDraft("");
+    setVisibleThinking("");
+    setToolEvents([]);
+    try {
+      const response = await getChapterScriptChatMessages(run.run_id, chapterId);
+      setChatMessages(response.messages.map((message) => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: message.content,
+      })));
+    } catch {
+      setChatMessages([]);
+    }
+  }
+
   async function handleSendChapterChat() {
-    if (!run || !chatChapterId || !chatInput.trim()) {
+    if (!run || busy || !chatChapterId || !chatInput.trim()) {
       return;
     }
     const message = chatInput.trim();
@@ -541,7 +662,10 @@ export default function Home() {
     setVisibleThinking("");
     setToolEvents([]);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/runs/${run.run_id}/chapter-cards/${chatChapterId}/chat/stream`, {
+      const chatPath = chatMode === "script"
+        ? "chapter-script-cards"
+        : "chapter-cards";
+      const response = await fetch(`${API_BASE_URL}/api/runs/${run.run_id}/${chatPath}/${chatChapterId}/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message }),
@@ -608,11 +732,102 @@ export default function Home() {
     setReportMarkdown("");
     setValidationReport(null);
     setActiveArtifactPanel(null);
+    setChapterScriptReviews([]);
+    setOpenScriptChapterId(null);
     setGenerationRequested(true);
     try {
       const nextRun = await generateRun(run.run_id, controls);
       setRun(nextRun);
-      if (nextRun.status === "succeeded") {
+      if (nextRun.status === "awaiting_script_review" || nextRun.artifacts.includes("chapter_script_reviews.json")) {
+        await loadChapterScriptReviewState(nextRun.run_id);
+        setGenerationRequested(false);
+      }
+    } catch (nextError) {
+      setGenerationRequested(false);
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleApproveChapterScript(chapterId: string) {
+    if (!run || busy) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await approveChapterScript(run.run_id, chapterId);
+      setChapterScriptReviews(response.items);
+      setRun(await getRun(run.run_id));
+      await refreshTasks();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleApproveAllChapterScripts() {
+    if (!run) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await approveAllChapterScripts(run.run_id);
+      setChapterScriptReviews(response.items);
+      setRun(await getRun(run.run_id));
+      await refreshTasks();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRegenerateChapterScript(chapterId: string) {
+    if (!run || busy) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setYamlText("");
+      setReportMarkdown("");
+      setValidationReport(null);
+      setFinalFeedbackOpen(false);
+      setFinalFeedbackResult(null);
+      setFinalFeedbackChapterId(null);
+      setFinalFeedbackApplying(false);
+      setFinalFeedbackMessages([]);
+      setFinalFeedbackDraft("");
+      setFinalFeedbackThinking("");
+      setActiveArtifactPanel(null);
+      const response = await regenerateChapterScript(run.run_id, chapterId);
+      setChapterScriptReviews(response.items);
+      setRun({ ...run, status: "regenerating_chapter_script", current_stage: "regenerate_chapter_script" });
+      await refreshTasks();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleContinuityMerge() {
+    if (!run) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setActiveArtifactPanel(null);
+    setGenerationRequested(true);
+    try {
+      const nextRun = await continuityMerge(run.run_id);
+      setRun({ ...nextRun, status: "merging_continuity", current_stage: "continuity_merge" });
+      await refreshTasks();
+      if (nextRun.status === "awaiting_final_review" || nextRun.artifacts.includes("script.yaml")) {
         await loadFinalArtifacts(nextRun.run_id);
         setActiveArtifactPanel("yaml");
         setGenerationRequested(false);
@@ -626,7 +841,7 @@ export default function Home() {
   }
 
   async function handleValidateYaml() {
-    if (!run) {
+    if (!run || busy) {
       return;
     }
     setBusy(true);
@@ -635,6 +850,154 @@ export default function Home() {
       const report = await validateYaml(run.run_id, yamlText);
       setValidationReport(report);
       setActiveArtifactPanel("report");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCreateFinalFeedback() {
+    if (!run || busy || !finalFeedbackText.trim()) {
+      return;
+    }
+    const complaint = finalFeedbackText.trim();
+    const desiredChange = finalFeedbackDesired.trim();
+    setBusy(true);
+    setError(null);
+    setFinalFeedbackDraft("");
+    setFinalFeedbackThinking("");
+    setFinalFeedbackResult(null);
+    setFinalFeedbackChapterId(null);
+    setFinalFeedbackApplying(false);
+    setFinalFeedbackMessages((current) => [
+      ...current,
+      {
+        role: "user",
+        content: `${finalFeedbackCategory === "continuity" ? "连贯性不满意" : "具体剧本点不满意"}：${complaint}${desiredChange ? `\n希望调整：${desiredChange}` : ""}`,
+      },
+    ]);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/runs/${run.run_id}/final-feedback/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          category: finalFeedbackCategory,
+          complaint,
+          desired_change: desiredChange,
+        }),
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(response.ok ? "Streaming response is empty." : await response.text());
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let collected = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+        for (const eventText of events) {
+          const payload = parseSsePayload(eventText);
+          if (!payload) {
+            continue;
+          }
+          if (payload.type === "visible_thinking") {
+            setFinalFeedbackThinking(String(payload.content ?? ""));
+          }
+          if (payload.type === "assistant_delta") {
+            const chunk = String(payload.content ?? "");
+            collected += chunk;
+            setFinalFeedbackDraft(collected);
+          }
+          if (payload.type === "final_feedback") {
+            const response = {
+              feedback: payload.feedback as FinalFeedbackResponse["feedback"],
+              suggested_chapter_id: (payload.suggested_chapter_id as string | null | undefined) ?? null,
+              suggested_scene_id: (payload.suggested_scene_id as string | null | undefined) ?? null,
+              message: String(payload.message ?? ""),
+            };
+            setFinalFeedbackResult(response);
+            setFinalFeedbackChapterId(null);
+          }
+          if (payload.type === "final") {
+            const content = collected || String(payload.content ?? "");
+            setFinalFeedbackMessages((current) => [...current, { role: "assistant", content }]);
+            setFinalFeedbackDraft("");
+          }
+          if (payload.type === "error") {
+            throw new Error(String(payload.content ?? "Final feedback chat failed."));
+          }
+        }
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setFinalFeedbackDraft("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleApplyFinalFeedback() {
+    if (!run || busy || finalFeedbackApplying || !finalFeedbackResult) {
+      return;
+    }
+    const feedbackToApply = finalFeedbackResult;
+    if (feedbackToApply.feedback.target_type !== "continuity" && !finalFeedbackChapterId) {
+      setError("请先确认要重写的章节，再执行返修。");
+      return;
+    }
+    setBusy(true);
+    setFinalFeedbackApplying(true);
+    setError(null);
+    setActiveArtifactPanel(null);
+    setGenerationRequested(true);
+    try {
+      const response = await applyFinalFeedback(
+        run.run_id,
+        feedbackToApply.feedback.id,
+        feedbackToApply.feedback.target_type === "continuity" ? null : finalFeedbackChapterId,
+      );
+      setFinalFeedbackMessages((current) => [
+        ...current,
+        { role: "assistant", content: response.message },
+      ]);
+      setFinalFeedbackResult(null);
+      setFinalFeedbackChapterId(null);
+      const nextStatus = feedbackToApply.feedback.target_type === "continuity"
+        ? "merging_continuity"
+        : "regenerating_chapter_script";
+      setRun({
+        ...run,
+        status: nextStatus,
+        current_stage: nextStatus === "merging_continuity" ? "continuity_merge" : "regenerate_chapter_script",
+      });
+      await refreshTasks();
+    } catch (nextError) {
+      setGenerationRequested(false);
+      setFinalFeedbackApplying(false);
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleConfirmFinalScript() {
+    if (!run || busy) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const nextRun = await confirmFinalScript(run.run_id);
+      setRun(nextRun);
+      setFinalFeedbackOpen(false);
+      await refreshTasks();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
@@ -729,7 +1092,7 @@ export default function Home() {
   }
 
   return (
-    <div className={sidePanelOpen ? "workspace workspace-with-artifact" : "workspace workspace-compact"}>
+    <div className={artifactPanelOpen ? "workspace workspace-with-artifact" : "workspace workspace-compact"}>
       <aside className="sidebar">
         <div className="sidebar-brand">
           <strong>Novel2Script</strong>
@@ -758,16 +1121,19 @@ export default function Home() {
           <button type="button" disabled={!storyBibleMarkdown} onClick={() => openArtifactPanel("storyBible")}>
             Story Bible
           </button>
+          <button type="button" disabled={!chapterScriptReviews.length} onClick={() => openArtifactPanel("chapterScripts")}>
+            章节剧本卡
+          </button>
           <button type="button" disabled={!yamlText} onClick={() => openArtifactPanel("yaml")}>
             打开 YAML
           </button>
           <button type="button" disabled={!reportMarkdown && !validationReport} onClick={() => openArtifactPanel("report")}>
             查看报告
           </button>
-          <button type="button" disabled={!hasArtifacts} onClick={() => openArtifactPanel("downloads")}>
+          <button type="button" disabled={!artifactGroups.length} onClick={() => openArtifactPanel("downloads")}>
             下载产物
           </button>
-          <button type="button" disabled={!run} onClick={() => openArtifactPanel("details")}>
+          <button type="button" disabled={!run || !artifactGroups.length} onClick={() => openArtifactPanel("details")}>
             运行详情
           </button>
         </div>
@@ -893,10 +1259,32 @@ export default function Home() {
                   减少 AI 新增
                 </button>
                 <button type="button" disabled={!canGenerate || busy || isPolling} onClick={handleGenerate}>
-                  采纳计划并生成剧本
+                  生成每章剧本卡
                 </button>
               </div>
             </UserMessage>
+          ) : null}
+
+          {chapterScriptReviews.length ? (
+            <AssistantMessage title="章节剧本卡确认">
+              <ChapterScriptReviewWorkbench
+                allApproved={allScriptsApproved}
+                busy={busy}
+                canMerge={canContinuityMerge}
+                expanded={scriptReviewsExpanded}
+                filter={scriptReviewFilter}
+                items={chapterScriptReviews}
+                onApprove={handleApproveChapterScript}
+                onApproveAll={handleApproveAllChapterScripts}
+                onDiscuss={handleOpenScriptChat}
+                onFilterChange={setScriptReviewFilter}
+                onMerge={handleContinuityMerge}
+                onRegenerate={handleRegenerateChapterScript}
+                onToggleExpanded={() => setScriptReviewsExpanded((current) => !current)}
+                openChapterId={openScriptChapterId}
+                setOpenChapterId={setOpenScriptChapterId}
+              />
+            </AssistantMessage>
           ) : null}
 
           {completed ? (
@@ -931,12 +1319,16 @@ export default function Home() {
         <ChapterChatPanel
           assistantDraft={assistantDraft}
           busy={busy}
-          chapterItem={activeChatChapter}
+          chapterId={chatChapterId}
+          mode={chatMode}
+          summary={chatMode === "script" ? activeScriptChatChapter?.script_card?.summary : activeChatChapter?.card?.summary}
+          title={chatMode === "script" ? activeScriptChatChapter?.chapter.title : activeChatChapter?.chapter.title}
+          wordCount={chatMode === "script" ? activeScriptChatChapter?.chapter.char_count : activeChatChapter?.chapter.char_count}
           input={chatInput}
           messages={chatMessages}
           onChangeInput={setChatInput}
           onClose={() => setChatChapterId(null)}
-          onRegenerate={handleRegenerateChapter}
+          onRegenerate={chatMode === "script" ? handleRegenerateChapterScript : handleRegenerateChapter}
           onSend={handleSendChapterChat}
           toolEvents={toolEvents}
           visibleThinking={visibleThinking}
@@ -945,14 +1337,43 @@ export default function Home() {
         <ArtifactPanelView
           activePanel={activeArtifactPanel}
           artifactGroups={artifactGroups}
+          busy={busy}
           canValidate={canValidate}
           chapterCards={chapterCards}
+          chapterScriptReviews={chapterScriptReviews}
+          finalFeedbackCategory={finalFeedbackCategory}
+          finalFeedbackApplying={finalFeedbackApplying}
+          finalFeedbackChapterId={finalFeedbackChapterId}
+          finalFeedbackDesired={finalFeedbackDesired}
+          finalFeedbackDraft={finalFeedbackDraft}
+          finalFeedbackMessages={finalFeedbackMessages}
+          finalFeedbackOpen={finalFeedbackOpen}
+          finalFeedbackResult={finalFeedbackResult}
+          finalFeedbackText={finalFeedbackText}
+          finalFeedbackThinking={finalFeedbackThinking}
           handleDownloadEditedYaml={handleDownloadEditedYaml}
+          handleApplyFinalFeedback={handleApplyFinalFeedback}
+          handleConfirmFinalScript={handleConfirmFinalScript}
+          handleCreateFinalFeedback={handleCreateFinalFeedback}
           handleValidateYaml={handleValidateYaml}
           reportMarkdown={reportMarkdown}
           run={run}
           schema={schema}
           setActivePanel={setActiveArtifactPanel}
+          setFinalFeedbackCategory={(category) => {
+            setFinalFeedbackCategory(category);
+            clearFinalFeedbackDiagnosis();
+          }}
+          setFinalFeedbackChapterId={setFinalFeedbackChapterId}
+          setFinalFeedbackDesired={(value) => {
+            setFinalFeedbackDesired(value);
+            clearFinalFeedbackDiagnosis();
+          }}
+          setFinalFeedbackOpen={setFinalFeedbackOpen}
+          setFinalFeedbackText={(value) => {
+            setFinalFeedbackText(value);
+            clearFinalFeedbackDiagnosis();
+          }}
           setYamlText={setYamlText}
           storyBible={storyBible}
           storyBibleMarkdown={storyBibleMarkdown}
@@ -1067,6 +1488,7 @@ function ChapterReviewWorkbench({
       <div className="review-grid" data-testid="chapter-review-grid">
         {visibleItems.map((item) => (
           <ChapterReviewCard
+            busy={busy}
             item={item}
             key={item.review.chapter_id}
             onApprove={onApprove}
@@ -1088,6 +1510,7 @@ function ChapterReviewWorkbench({
 }
 
 function ChapterReviewCard({
+  busy,
   item,
   onApprove,
   onDiscuss,
@@ -1096,6 +1519,7 @@ function ChapterReviewCard({
   setOpen,
   typedSummary,
 }: {
+  busy: boolean;
   item: ChapterReviewItem;
   onApprove: (chapterId: string) => void;
   onDiscuss: (chapterId: string) => void;
@@ -1143,11 +1567,180 @@ function ChapterReviewCard({
         <button type="button" disabled={!card} onClick={() => onDiscuss(chapterId)}>
           讨论/修改理解
         </button>
-        <button type="button" disabled={!card || item.review.status === "approved"} onClick={() => onApprove(chapterId)}>
+        <button type="button" disabled={busy || !card || item.review.status === "approved"} onClick={() => onApprove(chapterId)}>
           通过
         </button>
-        <button type="button" onClick={() => onRegenerate(chapterId)}>
+        <button type="button" disabled={busy} onClick={() => onRegenerate(chapterId)}>
           重新理解
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function ChapterScriptReviewWorkbench({
+  allApproved,
+  busy,
+  canMerge,
+  expanded,
+  filter,
+  items,
+  onApprove,
+  onApproveAll,
+  onDiscuss,
+  onFilterChange,
+  onMerge,
+  onRegenerate,
+  onToggleExpanded,
+  openChapterId,
+  setOpenChapterId,
+}: {
+  allApproved: boolean;
+  busy: boolean;
+  canMerge: boolean;
+  expanded: boolean;
+  filter: ReviewFilter;
+  items: ChapterScriptReviewItem[];
+  onApprove: (chapterId: string) => void;
+  onApproveAll: () => void;
+  onDiscuss: (chapterId: string) => void;
+  onFilterChange: (filter: ReviewFilter) => void;
+  onMerge: () => void;
+  onRegenerate: (chapterId: string) => void;
+  onToggleExpanded: () => void;
+  openChapterId: string | null;
+  setOpenChapterId: (chapterId: string | null) => void;
+}) {
+  const filtered = filterScriptReviewItems(items, filter);
+  const visibleItems = expanded ? filtered : filtered.slice(0, 5);
+  const readyCount = items.filter((item) => item.review.status === "ready" || item.review.status === "approved").length;
+  const approvedCount = items.filter((item) => item.review.status === "approved").length;
+  return (
+    <div className="review-workbench script-workbench">
+      <div className="review-toolbar">
+        <div>
+          <span>已生成 {readyCount}/{items.length} 张剧本卡</span>
+          <strong>已通过 {approvedCount}/{items.length} 张</strong>
+        </div>
+        <div className="segmented-control" role="group" aria-label="剧本卡筛选">
+          <button className={filter === "all" ? "active" : ""} type="button" onClick={() => onFilterChange("all")}>
+            全部
+          </button>
+          <button className={filter === "pending" ? "active" : ""} type="button" onClick={() => onFilterChange("pending")}>
+            未通过
+          </button>
+          <button className={filter === "attention" ? "active" : ""} type="button" onClick={() => onFilterChange("attention")}>
+            需重写
+          </button>
+        </div>
+      </div>
+      <div className="review-actions">
+        <button type="button" disabled={!items.length || busy} onClick={onApproveAll}>
+          全部通过
+        </button>
+        <button type="button" disabled={!canMerge || busy} onClick={onMerge}>
+          连贯性合成并导出 YAML
+        </button>
+        <button type="button" disabled={filtered.length <= 5} onClick={onToggleExpanded}>
+          {expanded ? "收起剧本卡" : "展开全部"}
+        </button>
+      </div>
+      <div className="review-grid" data-testid="chapter-script-review-grid">
+        {visibleItems.map((item) => (
+          <ChapterScriptReviewCard
+            busy={busy}
+            item={item}
+            key={item.review.chapter_id}
+            onApprove={onApprove}
+            onDiscuss={onDiscuss}
+            onRegenerate={onRegenerate}
+            open={openChapterId === item.review.chapter_id}
+            setOpen={(nextOpen) => setOpenChapterId(nextOpen ? item.review.chapter_id : null)}
+          />
+        ))}
+      </div>
+      {!allApproved ? (
+        <p className="review-hint">最终 YAML 只会由已通过的章节剧本卡合成。</p>
+      ) : (
+        <p className="review-hint success-text">所有章节剧本卡已通过，可以进入连贯性合成。</p>
+      )}
+    </div>
+  );
+}
+
+function ChapterScriptReviewCard({
+  busy,
+  item,
+  onApprove,
+  onDiscuss,
+  onRegenerate,
+  open,
+  setOpen,
+}: {
+  busy: boolean;
+  item: ChapterScriptReviewItem;
+  onApprove: (chapterId: string) => void;
+  onDiscuss: (chapterId: string) => void;
+  onRegenerate: (chapterId: string) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
+  const card = item.script_card;
+  const chapterId = item.review.chapter_id;
+  return (
+    <article className={`review-card script-card ${scriptReviewStatusClass(item.review.status)}`}>
+      <div className="review-card-head">
+        <div>
+          <strong>
+            第 {item.chapter.index} 章剧本卡 · {item.chapter.title}
+          </strong>
+          <span>{item.chapter.char_count} 字 · {scriptReviewStatusLabel(item.review.status)}</span>
+        </div>
+        <span className="revision-pill">重写 {item.review.revision_count}</span>
+      </div>
+      {card ? (
+        <>
+          <p className="review-summary">{card.summary}</p>
+          <div className="review-tags">
+            <span>{card.scenes.length} 场戏</span>
+            <span>{card.format_type}</span>
+            {card.absorbed_feedback.length ? <span>已吸收反馈</span> : null}
+          </div>
+          {open ? (
+            <div className="review-details">
+              <DetailList title="开场承接" items={[card.opening_bridge]} />
+              <DetailList title="结尾钩子" items={[card.ending_hook]} />
+              <DetailList title="衔接点" items={card.continuity_links} />
+              <DetailList title="已吸收反馈" items={card.absorbed_feedback} />
+              <div className="detail-list">
+                <span>场景</span>
+                {card.scenes.map((scene) => (
+                  <div className="script-scene-preview" key={scene.id}>
+                    <strong>{scene.id} · {scene.title}</strong>
+                    <p>{scene.purpose}</p>
+                    <small>冲突：{scene.conflict}</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p className="review-summary">这一章剧本卡还在生成中。</p>
+      )}
+      {item.review.error ? <p className="error-text">{item.review.error}</p> : null}
+      <div className="review-card-actions">
+        <button type="button" disabled={!card} onClick={() => setOpen(!open)}>
+          {open ? "收起详情" : "查看剧本卡"}
+        </button>
+        <button type="button" disabled={!card} onClick={() => onDiscuss(chapterId)}>
+          讨论/修改剧本
+        </button>
+        <button type="button" disabled={busy || !card || item.review.status === "approved"} onClick={() => onApprove(chapterId)}>
+          通过
+        </button>
+        <button type="button" disabled={busy} onClick={() => onRegenerate(chapterId)}>
+          重写本章
         </button>
       </div>
     </article>
@@ -1157,7 +1750,11 @@ function ChapterReviewCard({
 function ChapterChatPanel({
   assistantDraft,
   busy,
-  chapterItem,
+  chapterId,
+  mode,
+  summary,
+  title,
+  wordCount,
   input,
   messages,
   onChangeInput,
@@ -1169,7 +1766,11 @@ function ChapterChatPanel({
 }: {
   assistantDraft: string;
   busy: boolean;
-  chapterItem: ChapterReviewItem | null;
+  chapterId: string;
+  mode: ChatMode;
+  summary?: string;
+  title?: string;
+  wordCount?: number;
   input: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   onChangeInput: (value: string) => void;
@@ -1183,24 +1784,24 @@ function ChapterChatPanel({
     <aside className="chapter-chat-panel" data-testid="chapter-chat-panel">
       <div className="artifact-header">
         <div>
-          <span>章节讨论</span>
-          <strong>{chapterItem?.chapter.title ?? "章节"}</strong>
+          <span>{mode === "script" ? "剧本卡讨论" : "章节讨论"}</span>
+          <strong>{title ?? "章节"}</strong>
         </div>
         <button type="button" onClick={onClose}>
           关闭
         </button>
       </div>
       <div className="chapter-chat-context">
-        {chapterItem?.card ? (
+        {summary ? (
           <>
-            <span>{chapterItem.review.chapter_id} · {chapterItem.chapter.char_count} 字</span>
-            <p>{chapterItem.card.summary}</p>
-            <button type="button" onClick={() => onRegenerate(chapterItem.review.chapter_id)}>
-              重新理解本章
+            <span>{chapterId} · {wordCount ?? 0} 字</span>
+            <p>{summary}</p>
+            <button type="button" disabled={busy} onClick={() => onRegenerate(chapterId)}>
+              {mode === "script" ? "重写本章剧本卡" : "重新理解本章"}
             </button>
           </>
         ) : (
-          <p>等待章节理解卡生成。</p>
+          <p>{mode === "script" ? "等待章节剧本卡生成。" : "等待章节理解卡生成。"}</p>
         )}
       </div>
       <div className="chapter-chat-messages" aria-label="章节聊天消息">
@@ -1566,14 +2167,34 @@ function PlanCards({
 function ArtifactPanelView({
   activePanel,
   artifactGroups,
+  busy,
   canValidate,
   chapterCards,
+  chapterScriptReviews,
+  finalFeedbackCategory,
+  finalFeedbackApplying,
+  finalFeedbackChapterId,
+  finalFeedbackDesired,
+  finalFeedbackDraft,
+  finalFeedbackMessages,
+  finalFeedbackOpen,
+  finalFeedbackResult,
+  finalFeedbackText,
+  finalFeedbackThinking,
   handleDownloadEditedYaml,
+  handleApplyFinalFeedback,
+  handleConfirmFinalScript,
+  handleCreateFinalFeedback,
   handleValidateYaml,
   reportMarkdown,
   run,
   schema,
   setActivePanel,
+  setFinalFeedbackCategory,
+  setFinalFeedbackChapterId,
+  setFinalFeedbackDesired,
+  setFinalFeedbackOpen,
+  setFinalFeedbackText,
   setYamlText,
   storyBible,
   storyBibleMarkdown,
@@ -1582,14 +2203,34 @@ function ArtifactPanelView({
 }: {
   activePanel: ArtifactPanel;
   artifactGroups: { title: string; items: string[] }[];
+  busy: boolean;
   canValidate: boolean;
   chapterCards: ChapterCard[];
+  chapterScriptReviews: ChapterScriptReviewItem[];
+  finalFeedbackCategory: "continuity" | "script_point";
+  finalFeedbackApplying: boolean;
+  finalFeedbackChapterId: string | null;
+  finalFeedbackDesired: string;
+  finalFeedbackDraft: string;
+  finalFeedbackMessages: Array<{ role: "user" | "assistant"; content: string }>;
+  finalFeedbackOpen: boolean;
+  finalFeedbackResult: FinalFeedbackResponse | null;
+  finalFeedbackText: string;
+  finalFeedbackThinking: string;
   handleDownloadEditedYaml: () => void;
+  handleApplyFinalFeedback: () => void;
+  handleConfirmFinalScript: () => void;
+  handleCreateFinalFeedback: () => void;
   handleValidateYaml: () => void;
   reportMarkdown: string;
   run: RunInfo | null;
   schema: Record<string, unknown> | null;
   setActivePanel: (panel: ArtifactPanel | null) => void;
+  setFinalFeedbackCategory: (category: "continuity" | "script_point") => void;
+  setFinalFeedbackChapterId: (chapterId: string | null) => void;
+  setFinalFeedbackDesired: (value: string) => void;
+  setFinalFeedbackOpen: (open: boolean) => void;
+  setFinalFeedbackText: (value: string) => void;
   setYamlText: (value: string) => void;
   storyBible: StoryBible | null;
   storyBibleMarkdown: string;
@@ -1608,11 +2249,12 @@ function ArtifactPanelView({
         </button>
       </div>
       <div className="artifact-tabs">
-        {(["chapterCards", "storyBible", "yaml", "report", "downloads", "details"] as ArtifactPanel[]).map((panel) => (
+        {(["chapterCards", "chapterScripts", "storyBible", "yaml", "report", "downloads", "details"] as ArtifactPanel[]).map((panel) => (
           <button
             className={activePanel === panel ? "active" : ""}
             disabled={
               (panel === "chapterCards" && !chapterCards.length)
+              || (panel === "chapterScripts" && !chapterScriptReviews.length)
               || (panel === "storyBible" && !storyBible)
               || (panel === "yaml" && !yamlText)
             }
@@ -1643,6 +2285,29 @@ function ArtifactPanelView({
           )}
         </div>
       ) : null}
+      {activePanel === "chapterScripts" ? (
+        <div className="artifact-body">
+          {chapterScriptReviews.length ? (
+            <div className="chapter-card-list">
+              {chapterScriptReviews.map((item) => (
+                <div className="chapter-card-item" key={item.review.chapter_id}>
+                  <strong>
+                    {item.review.chapter_id} · {item.chapter.title} · {scriptReviewStatusLabel(item.review.status)}
+                  </strong>
+                  <p>{item.script_card?.summary ?? "剧本卡尚未生成。"}</p>
+                  {item.script_card ? (
+                    <small>
+                      场景：{item.script_card.scenes.map((scene) => `${scene.id} ${scene.title}`).join(" / ")}
+                    </small>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="hint-card">生成每章剧本卡后，这里会显示结构化剧本卡。</div>
+          )}
+        </div>
+      ) : null}
       {activePanel === "storyBible" ? (
         <div className="artifact-body">
           {storyBible ? (
@@ -1662,9 +2327,136 @@ function ArtifactPanelView({
         <div className="artifact-body">
           {yamlText ? (
             <>
+              <div className="final-review-card">
+                <div>
+                  <span>最终确认</span>
+                  <strong>这份 YAML 来自已通过章节剧本卡和连贯性合成</strong>
+                  <p>如果整体顺序、过渡或人物动机衔接不顺，走连贯性返修；如果某个剧本点不满意，先定位章节，再只重写那一章。</p>
+                </div>
+                <div className="inline-actions">
+                  <button type="button" disabled={busy} onClick={handleConfirmFinalScript}>
+                    确认剧本
+                  </button>
+                  <button type="button" onClick={() => setFinalFeedbackOpen(true)}>
+                    剧本不满意
+                  </button>
+                </div>
+                {finalFeedbackOpen ? (
+                  <div className="feedback-box">
+                    <div className="segmented-control" role="group" aria-label="最终返修类型">
+                      <button
+                        className={finalFeedbackCategory === "continuity" ? "active" : ""}
+                        disabled={busy || finalFeedbackApplying}
+                        type="button"
+                        onClick={() => setFinalFeedbackCategory("continuity")}
+                      >
+                        连贯性不满意
+                      </button>
+                      <button
+                        className={finalFeedbackCategory === "script_point" ? "active" : ""}
+                        disabled={busy || finalFeedbackApplying}
+                        type="button"
+                        onClick={() => setFinalFeedbackCategory("script_point")}
+                      >
+                        某个剧本点不满意
+                      </button>
+                    </div>
+                    <div className="feedback-chat-log">
+                      {finalFeedbackMessages.length ? finalFeedbackMessages.map((message, index) => (
+                        <div className={`chapter-chat-message ${message.role}`} key={`${message.role}-${index}`}>
+                          <span>{message.role === "assistant" ? "AI" : "你"}</span>
+                          <p>{message.content}</p>
+                        </div>
+                      )) : (
+                        <div className="hint-card">
+                          先告诉 AI 成品哪里不对。AI 会判断问题该回到“连贯性合成”，还是先定位到某章剧本卡重写。
+                        </div>
+                      )}
+                      {finalFeedbackThinking ? (
+                        <div className="visible-thinking">
+                          <span>思考摘要</span>
+                          <p>{finalFeedbackThinking}</p>
+                        </div>
+                      ) : null}
+                      {finalFeedbackDraft ? (
+                        <div className="chapter-chat-message assistant streaming">
+                          <span>AI</span>
+                          <p>{finalFeedbackDraft}</p>
+                        </div>
+                      ) : null}
+                    </div>
+                    <textarea
+                      disabled={busy || finalFeedbackApplying}
+                      value={finalFeedbackText}
+                      onChange={(event) => setFinalFeedbackText(event.target.value)}
+                      placeholder="说明哪里不满意，例如：第二章和第三章之间过渡太突然，或者第三章对白太解释。"
+                    />
+                    <textarea
+                      disabled={busy || finalFeedbackApplying}
+                      value={finalFeedbackDesired}
+                      onChange={(event) => setFinalFeedbackDesired(event.target.value)}
+                      placeholder="希望怎么改，例如：更忠实原文、减少解释、加强冲突。"
+                    />
+                    <div className="inline-actions">
+                      <button type="button" disabled={busy || !finalFeedbackText.trim() || finalFeedbackApplying} onClick={handleCreateFinalFeedback}>
+                        发送给 AI 诊断
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          busy
+                          ||
+                          !finalFeedbackResult
+                          || finalFeedbackApplying
+                          || (
+                            finalFeedbackResult.feedback.target_type !== "continuity"
+                            && !finalFeedbackChapterId
+                          )
+                        }
+                        onClick={handleApplyFinalFeedback}
+                      >
+                        {finalFeedbackApplying
+                          ? "正在回退处理..."
+                          : finalFeedbackResult?.feedback.target_type === "continuity"
+                            ? "带着反馈重新合成"
+                            : "确认并重写对应章节"}
+                      </button>
+                    </div>
+                    {finalFeedbackResult ? (
+                      <div className="notice">
+                        <strong>{finalFeedbackResult.message}</strong>
+                        <div>
+                          建议定位：
+                          {finalFeedbackResult.suggested_chapter_id ?? "连贯性合成阶段"}
+                          {finalFeedbackResult.suggested_scene_id ? ` / ${finalFeedbackResult.suggested_scene_id}` : ""}
+                        </div>
+                        {finalFeedbackResult.feedback.target_type !== "continuity" ? (
+                          <label className="feedback-target-select">
+                            <span>确认要重写的章节</span>
+                            <select
+                              disabled={busy || finalFeedbackApplying}
+                              value={finalFeedbackChapterId ?? ""}
+                              onChange={(event) => setFinalFeedbackChapterId(event.target.value || null)}
+                            >
+                              <option value="">请选择章节</option>
+                              {chapterScriptReviews.map((item) => (
+                                <option key={item.review.chapter_id} value={item.review.chapter_id}>
+                                  {item.review.chapter_id} · {item.chapter.title}
+                                  {item.review.chapter_id === finalFeedbackResult.suggested_chapter_id ? "（AI 建议）" : ""}
+                                </option>
+                              ))}
+                            </select>
+                            <small>AI 只是建议定位，真正回退哪一章由作者确认。</small>
+                          </label>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
               <YamlEditor value={yamlText} schema={schema} onChange={setYamlText} />
               <div className="inline-actions">
-                <button type="button" disabled={!canValidate} onClick={handleValidateYaml}>
+                <button type="button" disabled={busy || !canValidate} onClick={handleValidateYaml}>
                   重新校验 YAML
                 </button>
                 <button type="button" disabled={!yamlText.trim()} onClick={handleDownloadEditedYaml}>
@@ -1838,14 +2630,23 @@ function getConversationPhase(
   if (yamlText && run.status === "succeeded") {
     return "completed";
   }
+  if (yamlText && run.status === "awaiting_final_review") {
+    return "completed";
+  }
   if (run.status === "awaiting_chapter_review" || run.status === "regenerating_chapter") {
     return "reviewing";
+  }
+  if (run.status === "awaiting_script_review" || run.status === "regenerating_chapter_script") {
+    return "generating";
   }
   if (run.status === "reading_chapters") {
     return "analyzing";
   }
   if (run.status === "planning") {
     return "analyzing";
+  }
+  if (run.status === "generating_chapter_scripts" || run.status === "merging_continuity") {
+    return "generating";
   }
   if (generationRequested || (isPolling && run.status !== "planned")) {
     return "generating";
@@ -1876,7 +2677,7 @@ function activeStepIndex(phase: ConversationPhase): number {
     reviewing: 1,
     planned: 2,
     generating: 3,
-    completed: 4,
+    completed: 5,
     failed: 0,
   };
   return indexes[phase];
@@ -1885,6 +2686,7 @@ function activeStepIndex(phase: ConversationPhase): number {
 function panelTitle(panel: ArtifactPanel): string {
   const labels: Record<ArtifactPanel, string> = {
     chapterCards: "章节理解卡",
+    chapterScripts: "章节剧本卡",
     storyBible: "Story Bible",
     yaml: "YAML",
     report: "改编报告",
@@ -1895,6 +2697,16 @@ function panelTitle(panel: ArtifactPanel): string {
 }
 
 function filterReviewItems(items: ChapterReviewItem[], filter: ReviewFilter): ChapterReviewItem[] {
+  if (filter === "pending") {
+    return items.filter((item) => item.review.status !== "approved");
+  }
+  if (filter === "attention") {
+    return items.filter((item) => item.review.status === "failed" || item.review.revision_count > 0);
+  }
+  return items;
+}
+
+function filterScriptReviewItems(items: ChapterScriptReviewItem[], filter: ReviewFilter): ChapterScriptReviewItem[] {
   if (filter === "pending") {
     return items.filter((item) => item.review.status !== "approved");
   }
@@ -1929,6 +2741,31 @@ function reviewStatusClass(status: ChapterReviewItem["review"]["status"]): strin
   return "ready";
 }
 
+function scriptReviewStatusLabel(status: ChapterScriptReviewItem["review"]["status"]): string {
+  const labels: Record<ChapterScriptReviewItem["review"]["status"], string> = {
+    pending: "排队中",
+    generating: "生成中",
+    ready: "待确认",
+    approved: "已通过",
+    regenerating: "重写中",
+    failed: "需处理",
+  };
+  return labels[status];
+}
+
+function scriptReviewStatusClass(status: ChapterScriptReviewItem["review"]["status"]): string {
+  if (status === "approved") {
+    return "approved";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  if (status === "generating" || status === "regenerating") {
+    return "running";
+  }
+  return "ready";
+}
+
 function runStatusLabel(status: RunInfo["status"]): string {
   const labels: Partial<Record<RunInfo["status"], string>> = {
     queued: "排队中",
@@ -1939,6 +2776,11 @@ function runStatusLabel(status: RunInfo["status"]): string {
     planning: "做计划",
     planned: "待生成",
     generating: "生成中",
+    generating_chapter_scripts: "生成剧本卡",
+    awaiting_script_review: "待确认剧本卡",
+    regenerating_chapter_script: "重写剧本卡",
+    merging_continuity: "合成中",
+    awaiting_final_review: "待最终确认",
     validating: "校验中",
     repairing: "修复中",
     exporting: "导出中",

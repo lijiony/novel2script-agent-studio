@@ -11,6 +11,8 @@ class WorkflowState(TypedDict, total=False):
     planner_output: dict[str, Any]
     adaptation_plan: dict[str, Any]
     author_controls: dict[str, Any]
+    chapter_script_cards: list[dict[str, Any]]
+    final_feedback: dict[str, Any]
     script_json: dict[str, Any]
     validation_report: dict[str, Any]
     repaired: bool

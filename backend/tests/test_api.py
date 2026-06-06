@@ -190,8 +190,26 @@ def test_generate_uses_author_controls_after_intake(tmp_path):
 
         assert response.status_code == 200
         manifest = store.read_manifest(run_id)
+        assert manifest.status == RunStatus.awaiting_script_review
+        assert "chapter_script_cards.json" in manifest.artifacts
+        assert "script.yaml" not in manifest.artifacts
+
+        script_reviews = client.get(f"/api/runs/{run_id}/chapter-script-reviews")
+        assert script_reviews.status_code == 200
+        assert len(script_reviews.json()["items"]) == 3
+
+        approve_scripts = client.post(f"/api/runs/{run_id}/chapter-script-cards/approve-all")
+        assert approve_scripts.status_code == 200
+        assert all(
+            item["review"]["status"] == "approved"
+            for item in approve_scripts.json()["items"]
+        )
+
+        merge = client.post(f"/api/runs/{run_id}/continuity-merge")
+        assert merge.status_code == 200
+        manifest = store.read_manifest(run_id)
         script = store.read_json(run_id, "script.json")
-        assert manifest.status == RunStatus.succeeded
+        assert manifest.status == RunStatus.awaiting_final_review
         assert script["adaptation_profile"]["adaptation_scale"] == "faithful"
         assert "script.yaml" in manifest.artifacts
     finally:
@@ -228,5 +246,122 @@ def test_run_list_and_chapter_regenerate_and_chat_stream(tmp_path):
         assert "sk-" not in body
         messages = store.read_json(run_id, "chapter_chat_messages.json")
         assert len(messages) >= 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_chapter_script_chat_and_final_feedback_stream(tmp_path):
+    client, store = _client_with_store(tmp_path)
+    try:
+        intake = client.post("/api/runs/intake", data={"text": SAMPLE_TEXT})
+        run_id = intake.json()["run_id"]
+        client.post(f"/api/runs/{run_id}/chapter-cards/approve-all")
+        client.post(f"/api/runs/{run_id}/build-plan")
+        client.post(f"/api/runs/{run_id}/generate", json={"controls": {}})
+
+        stream = client.post(
+            f"/api/runs/{run_id}/chapter-script-cards/ch_001/chat/stream",
+            json={"message": "这章对白太解释"},
+        )
+        assert stream.status_code == 200
+        assert "assistant_delta" in stream.text
+        assert "sk-" not in stream.text
+        assert len(store.read_json(run_id, "chapter_script_feedback.json")) >= 1
+
+        client.post(f"/api/runs/{run_id}/chapter-script-cards/approve-all")
+        client.post(f"/api/runs/{run_id}/continuity-merge")
+        feedback_stream = client.post(
+            f"/api/runs/{run_id}/final-feedback/chat/stream",
+            json={
+                "category": "script_point",
+                "complaint": "第三章对白太解释",
+                "desired_change": "减少解释，加强动作",
+            },
+        )
+        assert feedback_stream.status_code == 200
+        body = feedback_stream.text
+        assert "final_feedback" in body
+        assert "assistant_delta" in body
+        assert "sk-" not in body
+        assert len(store.read_json(run_id, "final_feedback_chat_messages.json")) >= 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_final_feedback_apply_requires_author_confirmation_and_final_confirm(tmp_path):
+    client, store = _client_with_store(tmp_path)
+    try:
+        intake = client.post("/api/runs/intake", data={"text": SAMPLE_TEXT})
+        run_id = intake.json()["run_id"]
+        client.post(f"/api/runs/{run_id}/chapter-cards/approve-all")
+        client.post(f"/api/runs/{run_id}/build-plan")
+        client.post(f"/api/runs/{run_id}/generate", json={"controls": {}})
+        blocked_before_final = client.post(
+            f"/api/runs/{run_id}/final-feedback",
+            json={
+                "category": "continuity",
+                "complaint": "还没生成最终稿就不该返修",
+                "desired_change": "等待最终稿",
+            },
+        )
+        assert blocked_before_final.status_code == 409
+        client.post(f"/api/runs/{run_id}/chapter-script-cards/approve-all")
+        client.post(f"/api/runs/{run_id}/continuity-merge")
+        assert store.read_manifest(run_id).status == RunStatus.awaiting_final_review
+
+        before_reviews = store.read_json(run_id, "chapter_script_reviews.json")
+        feedback_response = client.post(
+            f"/api/runs/{run_id}/final-feedback",
+            json={
+                "category": "script_point",
+                "complaint": "第三章对白太解释",
+                "desired_change": "减少解释，加强动作和停顿",
+            },
+        )
+        assert feedback_response.status_code == 200
+        assert feedback_response.json()["suggested_chapter_id"] == "ch_003"
+        feedback_id = feedback_response.json()["feedback"]["id"]
+
+        apply_without_target = client.post(
+            f"/api/runs/{run_id}/final-feedback/{feedback_id}/apply",
+            json={"confirmed_chapter_id": None},
+        )
+        assert apply_without_target.status_code == 409
+
+        apply_missing_target = client.post(
+            f"/api/runs/{run_id}/final-feedback/{feedback_id}/apply",
+            json={"confirmed_chapter_id": "ch_999"},
+        )
+        assert apply_missing_target.status_code == 409
+
+        apply = client.post(
+            f"/api/runs/{run_id}/final-feedback/{feedback_id}/apply",
+            json={"confirmed_chapter_id": "ch_003"},
+        )
+        assert apply.status_code == 200
+        manifest = store.read_manifest(run_id)
+        after_reviews = store.read_json(run_id, "chapter_script_reviews.json")
+        assert manifest.status == RunStatus.awaiting_script_review
+        assert after_reviews[0]["revision_count"] == before_reviews[0]["revision_count"]
+        assert after_reviews[1]["revision_count"] == before_reviews[1]["revision_count"]
+        assert after_reviews[2]["revision_count"] == before_reviews[2]["revision_count"] + 1
+        assert after_reviews[2]["status"] == "ready"
+        assert "script.yaml" not in manifest.artifacts
+
+        client.post(f"/api/runs/{run_id}/chapter-script-cards/ch_003/approve")
+        client.post(f"/api/runs/{run_id}/continuity-merge")
+        confirm = client.post(f"/api/runs/{run_id}/final-confirm")
+        assert confirm.status_code == 200
+        assert confirm.json()["status"] == "succeeded"
+
+        blocked_after_confirm = client.post(
+            f"/api/runs/{run_id}/final-feedback",
+            json={
+                "category": "continuity",
+                "complaint": "确认完成后不应该再回退",
+                "desired_change": "重新合成",
+            },
+        )
+        assert blocked_after_confirm.status_code == 409
     finally:
         app.dependency_overrides.clear()

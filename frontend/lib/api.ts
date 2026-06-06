@@ -18,6 +18,11 @@ export type RunStatus =
   | "planning"
   | "planned"
   | "generating"
+  | "generating_chapter_scripts"
+  | "awaiting_script_review"
+  | "regenerating_chapter_script"
+  | "merging_continuity"
+  | "awaiting_final_review"
   | "validating"
   | "repairing"
   | "exporting"
@@ -138,6 +143,85 @@ export type ChapterReviewsResponse = {
   items: ChapterReviewItem[];
 };
 
+export type ScriptScene = {
+  id: string;
+  title: string;
+  source_chapters: number[];
+  source_excerpt: string;
+  source_function: string;
+  location_id: string;
+  time_of_day: string;
+  characters: string[];
+  purpose: string;
+  scene_purpose: string;
+  conflict: string;
+  emotional_shift: string;
+  adaptation_reason: string;
+  performance_notes: string;
+  risk_note: string;
+  production_risk: string;
+  actions: Array<{ text: string; beat: string; origin: string }>;
+  dialogues: Array<{ speaker_id: string; line: string; emotion?: string | null; origin: string }>;
+  ai_added_content: string[];
+  revision_suggestions: string[];
+  adaptation_notes: string[];
+};
+
+export type ChapterScriptCard = {
+  chapter_id: string;
+  chapter_index: number;
+  title: string;
+  summary: string;
+  scenes: ScriptScene[];
+  opening_bridge: string;
+  ending_hook: string;
+  continuity_links: string[];
+  absorbed_feedback: string[];
+  revision_notes: string[];
+  format_type: ScriptFormat;
+};
+
+export type ChapterScriptReview = {
+  chapter_id: string;
+  status: "pending" | "generating" | "ready" | "approved" | "regenerating" | "failed";
+  approved_at?: string | null;
+  error?: string | null;
+  revision_count: number;
+};
+
+export type ChapterScriptReviewItem = {
+  chapter: ChapterReviewItem["chapter"];
+  source_card: ChapterCard | null;
+  script_card: ChapterScriptCard | null;
+  review: ChapterScriptReview;
+};
+
+export type ChapterScriptReviewsResponse = {
+  run_id: string;
+  items: ChapterScriptReviewItem[];
+};
+
+export type FinalFeedback = {
+  id: string;
+  source: "chapter_script_chat" | "final_review";
+  target_type: "continuity" | "chapter_script" | "scene" | "dialogue" | "action" | "unknown";
+  target_chapter_id?: string | null;
+  target_scene_id?: string | null;
+  complaint: string;
+  desired_change: string;
+  ai_assessment: string;
+  status: "pending" | "applied" | "dismissed";
+  created_at: string;
+  applied_at?: string | null;
+};
+
+export type FinalFeedbackResponse = {
+  feedback: FinalFeedback;
+  suggested_chapter_id?: string | null;
+  suggested_scene_id?: string | null;
+  message: string;
+};
+
 export type ChapterChatMessage = {
   id: string;
   chapter_id: string;
@@ -213,6 +297,65 @@ export async function generateRun(
   return getRun(result.run_id);
 }
 
+export async function getChapterScriptReviews(runId: string): Promise<ChapterScriptReviewsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-reviews`);
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function approveChapterScript(runId: string, chapterId: string): Promise<ChapterScriptReviewsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/${chapterId}/approve`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function approveAllChapterScripts(runId: string): Promise<ChapterScriptReviewsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/approve-all`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function regenerateChapterScript(runId: string, chapterId: string): Promise<ChapterScriptReviewsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/${chapterId}/regenerate`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function continuityMerge(runId: string): Promise<RunInfo> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/continuity-merge`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  const result = await response.json();
+  return getRun(result.run_id);
+}
+
+export async function confirmFinalScript(runId: string): Promise<RunInfo> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/final-confirm`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
 export async function buildPlan(runId: string): Promise<RunInfo> {
   const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/build-plan`, {
     method: "POST",
@@ -267,6 +410,58 @@ export async function getChapterChatMessages(
   chapterId: string,
 ): Promise<ChapterChatMessagesResponse> {
   const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/${chapterId}/chat/messages`);
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function getChapterScriptChatMessages(
+  runId: string,
+  chapterId: string,
+): Promise<ChapterChatMessagesResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/${chapterId}/chat/messages`);
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function createFinalFeedback(
+  runId: string,
+  category: "continuity" | "script_point",
+  complaint: string,
+  desiredChange: string,
+): Promise<FinalFeedbackResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/final-feedback`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      category,
+      complaint,
+      desired_change: desiredChange,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await errorText(response));
+  }
+  return response.json();
+}
+
+export async function applyFinalFeedback(
+  runId: string,
+  feedbackId: string,
+  confirmedChapterId?: string | null,
+): Promise<FinalFeedbackResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/final-feedback/${feedbackId}/apply`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ confirmed_chapter_id: confirmedChapterId ?? null }),
+  });
   if (!response.ok) {
     throw new Error(await errorText(response));
   }

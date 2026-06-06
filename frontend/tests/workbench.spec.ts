@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+test.setTimeout(90_000);
+
 const sixChapterNovel = Array.from({ length: 6 }, (_, index) => {
   const chapter = index + 1;
   return `第${chapter}章 线索${chapter}
@@ -49,21 +51,58 @@ test("reviews chapters before planning and keeps artifacts hidden until script g
   await expect(page.getByText("全书主线")).toBeVisible();
   await expect(page.getByText("为什么推荐这个方向")).toBeVisible();
   await expect(page.getByText("分章改编理由")).toBeVisible();
-  await expect(page.getByRole("button", { name: "采纳计划并生成剧本" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成每章剧本卡" })).toBeVisible();
   await expect(page.getByTestId("artifact-panel")).toHaveCount(0);
 
   await page.getByLabel("剧本类型").selectOption("short_drama");
   await page.getByLabel("改编尺度").selectOption("faithful");
   await page.getByLabel("风格偏向").selectOption("psychological");
   await page.getByLabel("作者备注").fill("心理活动要转成可表演动作。");
-  await page.getByRole("button", { name: "采纳计划并生成剧本" }).click();
+  await page.getByRole("button", { name: "生成每章剧本卡" }).click();
+
+  await expect(page.getByText("章节剧本卡确认")).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByTestId("chapter-script-review-grid").locator(".review-card")).toHaveCount(3);
+  await page.getByTestId("chapter-script-review-grid").locator(".review-card").first().getByRole("button", { name: "讨论/修改剧本" }).click();
+  await expect(page.getByTestId("chapter-chat-panel")).toBeVisible();
+  await expect(page.getByTestId("chapter-chat-panel").getByText("剧本卡讨论")).toBeVisible();
+  await page.getByTestId("chapter-chat-panel").getByRole("button", { name: "关闭" }).click();
+  await page.locator(".script-workbench").getByRole("button", { name: "全部通过" }).click();
+  await expect(page.getByText("所有章节剧本卡已通过")).toBeVisible();
+  await page.locator(".script-workbench").getByRole("button", { name: "连贯性合成并导出 YAML" }).click();
 
   await expect(page.getByText("剧本已生成")).toBeVisible({ timeout: 45_000 });
   await expect(page.getByTestId("artifact-panel")).toBeVisible();
   await expect(page.getByText("重新校验 YAML")).toBeVisible();
+  await expect(page.getByTestId("artifact-panel").getByText("最终确认")).toBeVisible();
+  await page.getByRole("button", { name: "剧本不满意" }).click();
+  await page.getByRole("button", { name: "某个剧本点不满意" }).click();
+  await page.getByPlaceholder(/说明哪里不满意/).fill("第三章对白太解释，需要先跟我确认再重写。");
+  await page.getByPlaceholder(/希望怎么改/).fill("减少解释，加强动作和停顿。");
+  await page.getByRole("button", { name: "发送给 AI 诊断" }).click();
+  await expect(page.getByText("思考摘要")).toBeVisible();
+  await expect(page.getByText(/建议定位：/)).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByRole("button", { name: "确认并重写对应章节" })).toBeDisabled();
+  await page.getByLabel("确认要重写的章节").selectOption("ch_003");
+  await expect(page.getByRole("button", { name: "确认并重写对应章节" })).toBeEnabled();
+  await page.getByRole("button", { name: "确认并重写对应章节" }).click();
+  await expect(page.getByText("章节剧本卡确认")).toBeVisible({ timeout: 45_000 });
+  await page.locator(".script-workbench").getByRole("button", { name: "全部通过" }).click();
+  await expect(page.getByText("所有章节剧本卡已通过")).toBeVisible();
+  const mergeButton = page.locator(".script-workbench").getByRole("button", { name: "连贯性合成并导出 YAML" });
+  await expect(mergeButton).toBeEnabled();
+  await mergeButton.click();
+  await expect(page.getByText("剧本已生成")).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByTestId("artifact-panel")).toBeVisible();
 
   await page.getByRole("button", { name: "重新校验 YAML" }).click();
   await expect(page.getByText("校验通过")).toBeVisible();
+  await page.getByTestId("artifact-panel").getByRole("button", { name: "YAML" }).click();
+  const confirmResponsePromise = page.waitForResponse((response) => (
+    response.url().includes("/final-confirm")
+    && response.request().method() === "POST"
+  ));
+  await page.getByTestId("artifact-panel").getByRole("button", { name: "确认剧本" }).click();
+  expect((await confirmResponsePromise).ok()).toBeTruthy();
 
   await page.getByRole("button", { name: "关闭产物面板" }).click();
   await expect(page.getByTestId("artifact-panel")).toHaveCount(0);

@@ -203,6 +203,47 @@ class ChapterReviewsResponse(StrictBaseModel):
     items: list[ChapterReviewItem]
 
 
+class ChapterScriptCard(StrictBaseModel):
+    chapter_id: str = Field(..., pattern=r"^ch_[0-9]{3}$")
+    chapter_index: int = Field(..., ge=1)
+    title: str = Field(..., min_length=1)
+    summary: str = Field(..., min_length=1)
+    scenes: list[Scene] = Field(..., min_length=1)
+    opening_bridge: str = Field(default="")
+    ending_hook: str = Field(default="")
+    continuity_links: list[str] = Field(default_factory=list)
+    absorbed_feedback: list[str] = Field(default_factory=list)
+    revision_notes: list[str] = Field(default_factory=list)
+    format_type: ScriptFormat = ScriptFormat.short_drama
+
+    @model_validator(mode="after")
+    def chapter_id_matches_index(self):
+        expected = f"ch_{self.chapter_index:03d}"
+        if self.chapter_id != expected:
+            raise ValueError(f"chapter_id must be {expected} for chapter_index {self.chapter_index}.")
+        return self
+
+
+class ChapterScriptReview(StrictBaseModel):
+    chapter_id: str = Field(..., pattern=r"^ch_[0-9]{3}$")
+    status: Literal["pending", "generating", "ready", "approved", "regenerating", "failed"] = "pending"
+    approved_at: str | None = None
+    error: str | None = None
+    revision_count: int = Field(default=0, ge=0)
+
+
+class ChapterScriptReviewItem(StrictBaseModel):
+    chapter: Chapter
+    source_card: ChapterCard | None = None
+    script_card: ChapterScriptCard | None = None
+    review: ChapterScriptReview
+
+
+class ChapterScriptReviewsResponse(StrictBaseModel):
+    run_id: str
+    items: list[ChapterScriptReviewItem]
+
+
 class RunListItem(StrictBaseModel):
     run_id: str
     title: str
@@ -231,6 +272,37 @@ class ChapterChatMessage(StrictBaseModel):
 
 class ChapterChatMessagesResponse(StrictBaseModel):
     messages: list[ChapterChatMessage]
+
+
+class ScriptFeedback(StrictBaseModel):
+    id: str
+    source: Literal["chapter_script_chat", "final_review"] = "final_review"
+    target_type: Literal["continuity", "chapter_script", "scene", "dialogue", "action", "unknown"]
+    target_chapter_id: str | None = Field(default=None, pattern=r"^ch_[0-9]{3}$")
+    target_scene_id: str | None = Field(default=None, pattern=r"^sc_[0-9]{3}$")
+    complaint: str = Field(..., min_length=1)
+    desired_change: str = ""
+    ai_assessment: str = ""
+    status: Literal["pending", "applied", "dismissed"] = "pending"
+    created_at: str
+    applied_at: str | None = None
+
+
+class FinalFeedbackRequest(StrictBaseModel):
+    category: Literal["continuity", "script_point"]
+    complaint: str = Field(..., min_length=1)
+    desired_change: str = ""
+
+
+class FinalFeedbackResponse(StrictBaseModel):
+    feedback: ScriptFeedback
+    suggested_chapter_id: str | None = None
+    suggested_scene_id: str | None = None
+    message: str
+
+
+class ApplyFinalFeedbackRequest(StrictBaseModel):
+    confirmed_chapter_id: str | None = Field(default=None, pattern=r"^ch_[0-9]{3}$")
 
 
 class StoryBibleChapter(StrictBaseModel):
@@ -336,6 +408,11 @@ class RunStatus(str, Enum):
     planning = "planning"
     planned = "planned"
     generating = "generating"
+    generating_chapter_scripts = "generating_chapter_scripts"
+    awaiting_script_review = "awaiting_script_review"
+    regenerating_chapter_script = "regenerating_chapter_script"
+    merging_continuity = "merging_continuity"
+    awaiting_final_review = "awaiting_final_review"
     validating = "validating"
     repairing = "repairing"
     exporting = "exporting"

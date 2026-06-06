@@ -1,5 +1,6 @@
 import json
 import shutil
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -14,6 +15,12 @@ ALLOWED_ARTIFACTS = {
     "chapter_cards.json",
     "chapter_reviews.json",
     "chapter_chat_messages.json",
+    "chapter_script_cards.json",
+    "chapter_script_reviews.json",
+    "chapter_script_feedback.json",
+    "chapter_script_chat_messages.json",
+    "final_feedback_chat_messages.json",
+    "continuity_report.md",
     "workflow_events.json",
     "reader_output.json",
     "story_bible.json",
@@ -39,6 +46,10 @@ WORKFLOW_STAGES = [
     "build_story_bible",
     "plan_adaptation",
     "await_author_controls",
+    "generate_chapter_script_cards",
+    "awaiting_script_review",
+    "regenerate_chapter_script",
+    "continuity_merge",
     "generate_script_json",
     "validate_schema",
     "repair_once_if_needed",
@@ -251,6 +262,18 @@ class RunStore:
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix(path.suffix + ".tmp")
+        temp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
         temp_path.write_text(content, encoding="utf-8")
-        temp_path.replace(path)
+        last_error: OSError | None = None
+        for attempt in range(6):
+            try:
+                temp_path.replace(path)
+                return
+            except OSError as exc:
+                last_error = exc
+                time.sleep(0.03 * (attempt + 1))
+        try:
+            temp_path.unlink(missing_ok=True)
+        finally:
+            if last_error:
+                raise last_error

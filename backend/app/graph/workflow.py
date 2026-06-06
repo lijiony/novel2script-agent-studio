@@ -12,10 +12,13 @@ from app.domain.schemas import (
     ChapterCard,
     ChapterChatMessage,
     ChapterReview,
+    ChapterScriptCard,
+    ChapterScriptReview,
     PlannerOutput,
     ReaderOutput,
     RunStatus,
     ScriptJson,
+    ScriptFeedback,
     SourceQuote,
     StoryFact,
     StoryBible,
@@ -40,6 +43,39 @@ class LlmWorkflowError(Exception):
     pass
 
 
+_CHINESE_DIGITS = {
+    0: "零",
+    1: "一",
+    2: "二",
+    3: "三",
+    4: "四",
+    5: "五",
+    6: "六",
+    7: "七",
+    8: "八",
+    9: "九",
+}
+
+
+def _chapter_number_markers(index: int) -> list[str]:
+    numbers = {str(index)}
+    if 0 < index < 100:
+        if index < 10:
+            numbers.add(_CHINESE_DIGITS[index])
+        elif index == 10:
+            numbers.add("十")
+        elif index < 20:
+            numbers.add(f"十{_CHINESE_DIGITS[index % 10]}")
+        else:
+            ten = index // 10
+            one = index % 10
+            numbers.add(f"{_CHINESE_DIGITS[ten]}十{_CHINESE_DIGITS[one]}" if one else f"{_CHINESE_DIGITS[ten]}十")
+    markers: list[str] = []
+    for number in numbers:
+        markers.extend([f"第{number}章", f"第 {number} 章"])
+    return markers
+
+
 class AdaptationWorkflow:
     def __init__(self, settings: Settings, store: RunStore):
         self.settings = settings
@@ -56,6 +92,9 @@ class AdaptationWorkflow:
             self.build_plan(run_id)
         if self.store.read_manifest(run_id).status == RunStatus.planned:
             self.generate(run_id, AuthorControls())
+        if self.store.read_manifest(run_id).status == RunStatus.awaiting_script_review:
+            self.approve_all_chapter_scripts(run_id)
+            self.continuity_merge(run_id)
 
     def intake(self, run_id: str) -> None:
         try:
@@ -210,6 +249,11 @@ class AdaptationWorkflow:
                     "adaptation_plan.json",
                     "adaptation_plan.md",
                     "author_controls.json",
+                    "chapter_script_cards.json",
+                    "chapter_script_reviews.json",
+                    "chapter_script_feedback.json",
+                    "chapter_script_chat_messages.json",
+                    "continuity_report.md",
                     "script.json",
                     "script.yaml",
                     "schema.json",
@@ -239,17 +283,298 @@ class AdaptationWorkflow:
                 "await_author_controls",
                 "succeeded",
                 message="Author controls accepted.",
-                run_status=RunStatus.generating,
+                run_status=RunStatus.generating_chapter_scripts,
             )
-            state = self._load_generation_state(run_id, author_controls)
-            self.generate_graph.invoke(state)
-            self.store.succeed(run_id)
+            self._generate_chapter_script_cards_for_review(run_id, author_controls)
         except (ChapterParseError, WorkflowValidationError) as exc:
             self.store.fail(run_id, RunStatus.failed_validation, str(exc))
         except LlmWorkflowError as exc:
             self.store.fail(run_id, RunStatus.failed_llm, str(exc))
         except Exception as exc:  # pragma: no cover - integration guard
             self.store.fail(run_id, RunStatus.failed_internal, str(exc))
+
+    def approve_chapter_script(self, run_id: str, chapter_id: str) -> None:
+        reviews = self._read_script_reviews(run_id)
+        cards = self._read_chapter_script_cards(run_id)
+        if chapter_id not in {card.chapter_id for card in cards}:
+            raise WorkflowValidationError("Chapter script card is not ready for approval.")
+        reviews = [
+            review.model_copy(
+                update={
+                    "status": "approved",
+                    "approved_at": now_iso(),
+                    "error": None,
+                }
+            )
+            if review.chapter_id == chapter_id
+            else review
+            for review in reviews
+        ]
+        self._write_script_reviews(run_id, reviews)
+        self.store.set_status(run_id, RunStatus.awaiting_script_review)
+
+    def approve_all_chapter_scripts(self, run_id: str) -> None:
+        reviews = self._read_script_reviews(run_id)
+        cards = self._read_chapter_script_cards(run_id)
+        ready_ids = {card.chapter_id for card in cards}
+        reviews = [
+            review.model_copy(
+                update={
+                    "status": "approved",
+                    "approved_at": review.approved_at or now_iso(),
+                    "error": None,
+                }
+            )
+            if review.chapter_id in ready_ids
+            else review
+            for review in reviews
+        ]
+        self._write_script_reviews(run_id, reviews)
+        self.store.set_status(run_id, RunStatus.awaiting_script_review)
+
+    def regenerate_chapter_script(
+        self,
+        run_id: str,
+        chapter_id: str,
+        feedback: ScriptFeedback | dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            feedback_model = (
+                ScriptFeedback.model_validate(feedback)
+                if feedback is not None
+                else None
+            )
+            chapters = [
+                Chapter.model_validate(item)
+                for item in self.store.read_json(run_id, "chapters.json")
+            ]
+            chapter_cards = [
+                ChapterCard.model_validate(item)
+                for item in self.store.read_json(run_id, "chapter_cards.json")
+            ]
+            author_controls = AuthorControls.model_validate(
+                self.store.read_json(run_id, "author_controls.json")
+            )
+            adaptation_plan = AdaptationPlan.model_validate(
+                self.store.read_json(run_id, "adaptation_plan.json")
+            )
+            chapter = next(
+                (item for item in chapters if f"ch_{item.index:03d}" == chapter_id),
+                None,
+            )
+            source_card = next(
+                (item for item in chapter_cards if item.chapter_id == chapter_id),
+                None,
+            )
+            if chapter is None or source_card is None:
+                raise WorkflowValidationError("Chapter source is not ready for script regeneration.")
+            reviews = self._read_script_reviews(run_id)
+            reviews = [
+                review.model_copy(
+                    update={"status": "regenerating", "approved_at": None, "error": None}
+                )
+                if review.chapter_id == chapter_id
+                else review
+                for review in reviews
+            ]
+            self._write_script_reviews(run_id, reviews)
+            self.store.set_stage(
+                run_id,
+                "regenerate_chapter_script",
+                "running",
+                message=f"Regenerating script card {chapter_id}.",
+                run_status=RunStatus.regenerating_chapter_script,
+            )
+            raw_card = (
+                self._mock_chapter_script_card(
+                    chapter,
+                    source_card,
+                    adaptation_plan,
+                    author_controls,
+                    [feedback_model] if feedback_model else [],
+                )
+                if self.llm.mock
+                else self._remote_chapter_script_card(
+                    chapter,
+                    source_card,
+                    adaptation_plan,
+                    author_controls,
+                    [feedback_model] if feedback_model else [],
+                )
+            )
+            new_card = ChapterScriptCard.model_validate(raw_card).model_dump(mode="json")
+            current_cards = [
+                card.model_dump(mode="json") for card in self._read_chapter_script_cards(run_id)
+            ]
+            replaced = False
+            next_cards = []
+            for card in current_cards:
+                if card["chapter_id"] == chapter_id:
+                    next_cards.append(new_card)
+                    replaced = True
+                else:
+                    next_cards.append(card)
+            if not replaced:
+                next_cards.append(new_card)
+            next_cards.sort(key=lambda item: item["chapter_index"])
+            self.store.write_json(run_id, "chapter_script_cards.json", next_cards)
+            reviews = [
+                review.model_copy(
+                    update={
+                        "status": "ready",
+                        "approved_at": None,
+                        "error": None,
+                        "revision_count": review.revision_count + 1,
+                    }
+                )
+                if review.chapter_id == chapter_id
+                else review
+                for review in reviews
+            ]
+            self._write_script_reviews(run_id, reviews)
+            self.store.remove_artifacts(
+                run_id,
+                [
+                    "script.json",
+                    "script.yaml",
+                    "schema.json",
+                    "schema.md",
+                    "adaptation_report.md",
+                    "report.json",
+                    "continuity_report.md",
+                ],
+            )
+            self.store.set_stage(
+                run_id,
+                "regenerate_chapter_script",
+                "succeeded",
+                message=f"{chapter_id} script card regenerated.",
+                run_status=RunStatus.awaiting_script_review,
+            )
+        except (WorkflowValidationError, LlmWorkflowError):
+            raise
+        except Exception as exc:
+            raise WorkflowValidationError(str(exc)) from exc
+
+    def continuity_merge(self, run_id: str, feedback: ScriptFeedback | dict[str, Any] | None = None) -> None:
+        try:
+            feedback_model = (
+                ScriptFeedback.model_validate(feedback)
+                if feedback is not None
+                else None
+            )
+            self._assert_script_reviews_approved(run_id)
+            author_controls = AuthorControls.model_validate(
+                self.store.read_json(run_id, "author_controls.json")
+            )
+            state = self._load_generation_state(run_id, author_controls)
+            state["chapter_script_cards"] = [
+                card.model_dump(mode="json") for card in self._read_chapter_script_cards(run_id)
+            ]  # type: ignore[typeddict-item]
+            if feedback_model:
+                state["final_feedback"] = feedback_model.model_dump(mode="json")  # type: ignore[typeddict-item]
+            self.store.set_stage(
+                run_id,
+                "continuity_merge",
+                "running",
+                message="Merging approved chapter script cards into one coherent script.",
+                run_status=RunStatus.merging_continuity,
+            )
+            self.store.write_text(
+                run_id,
+                "continuity_report.md",
+                _continuity_report_markdown(
+                    self._read_chapter_script_cards(run_id),
+                    feedback_model,
+                ),
+            )
+            self.generate_graph.invoke(state)
+            self.store.set_stage(
+                run_id,
+                "continuity_merge",
+                "succeeded",
+                message="Continuity merge completed. Final script awaits author review.",
+                run_status=RunStatus.awaiting_final_review,
+            )
+        except (ChapterParseError, WorkflowValidationError) as exc:
+            self.store.fail(run_id, RunStatus.failed_validation, str(exc))
+        except LlmWorkflowError as exc:
+            self.store.fail(run_id, RunStatus.failed_llm, str(exc))
+        except Exception as exc:  # pragma: no cover - integration guard
+            self.store.fail(run_id, RunStatus.failed_internal, str(exc))
+
+    def create_final_feedback(
+        self,
+        run_id: str,
+        category: str,
+        complaint: str,
+        desired_change: str = "",
+    ) -> ScriptFeedback:
+        self._assert_final_review_ready(run_id)
+        cards = self._read_chapter_script_cards(run_id)
+        target_chapter_id: str | None = None
+        target_scene_id: str | None = None
+        target_type = "continuity" if category == "continuity" else "chapter_script"
+        if category != "continuity":
+            target_chapter_id, target_scene_id = self._infer_feedback_target(complaint, cards)
+        feedback = ScriptFeedback(
+            id=str(uuid4()),
+            source="final_review",
+            target_type=target_type,  # type: ignore[arg-type]
+            target_chapter_id=target_chapter_id,
+            target_scene_id=target_scene_id,
+            complaint=complaint,
+            desired_change=desired_change,
+            ai_assessment=(
+                "这是连贯性问题，建议保留已通过章节剧本卡，只重新做跨章衔接合成。"
+                if category == "continuity"
+                else f"我判断这个问题最可能落在 {target_chapter_id or '待确认章节'}，需要作者确认后只重写该章剧本卡。"
+            ),
+            created_at=now_iso(),
+        )
+        feedbacks = self._read_feedback(run_id)
+        feedbacks.append(feedback)
+        self._write_feedback(run_id, feedbacks)
+        return feedback
+
+    def apply_final_feedback(
+        self,
+        run_id: str,
+        feedback_id: str,
+        confirmed_chapter_id: str | None = None,
+    ) -> ScriptFeedback:
+        self._assert_final_review_ready(run_id)
+        feedbacks = self._read_feedback(run_id)
+        feedback = next((item for item in feedbacks if item.id == feedback_id), None)
+        if feedback is None:
+            raise WorkflowValidationError("Feedback not found.")
+        if feedback.target_type == "continuity":
+            applied = feedback.model_copy(update={"status": "applied", "applied_at": now_iso()})
+            feedbacks = [applied if item.id == feedback_id else item for item in feedbacks]
+            self._write_feedback(run_id, feedbacks)
+            self.continuity_merge(run_id, applied)
+            return applied
+        chapter_id = confirmed_chapter_id
+        if not chapter_id:
+            raise WorkflowValidationError("A chapter confirmation is required before applying this feedback.")
+        if chapter_id not in {card.chapter_id for card in self._read_chapter_script_cards(run_id)}:
+            raise WorkflowValidationError("Confirmed chapter script card does not exist.")
+        applied = feedback.model_copy(
+            update={
+                "status": "applied",
+                "target_chapter_id": chapter_id,
+                "applied_at": now_iso(),
+            }
+        )
+        feedbacks = [applied if item.id == feedback_id else item for item in feedbacks]
+        self._write_feedback(run_id, feedbacks)
+        self.regenerate_chapter_script(run_id, chapter_id, applied)
+        return applied
+
+    def _assert_final_review_ready(self, run_id: str) -> None:
+        manifest = self.store.read_manifest(run_id)
+        if manifest.status != RunStatus.awaiting_final_review or "script.yaml" not in manifest.artifacts:
+            raise WorkflowValidationError("Final feedback is only available while the run is awaiting final review.")
 
     def _build_intake_graph(self):
         builder = StateGraph(WorkflowState)
@@ -381,6 +706,196 @@ class AdaptationWorkflow:
             "chapter_reviews.json",
             [review.model_dump(mode="json") for review in reviews],
         )
+
+    def _read_script_reviews(self, run_id: str) -> list[ChapterScriptReview]:
+        return [
+            ChapterScriptReview.model_validate(item)
+            for item in self.store.read_json(run_id, "chapter_script_reviews.json")
+        ]
+
+    def _write_script_reviews(
+        self, run_id: str, reviews: list[ChapterScriptReview]
+    ) -> None:
+        self.store.write_json(
+            run_id,
+            "chapter_script_reviews.json",
+            [review.model_dump(mode="json") for review in reviews],
+        )
+
+    def _read_chapter_script_cards(self, run_id: str) -> list[ChapterScriptCard]:
+        return [
+            ChapterScriptCard.model_validate(item)
+            for item in self.store.read_json(run_id, "chapter_script_cards.json")
+        ]
+
+    def _read_feedback(self, run_id: str) -> list[ScriptFeedback]:
+        try:
+            payload = self.store.read_json(run_id, "chapter_script_feedback.json")
+        except Exception:
+            payload = []
+        return [ScriptFeedback.model_validate(item) for item in payload]
+
+    def _write_feedback(self, run_id: str, feedbacks: list[ScriptFeedback]) -> None:
+        self.store.write_json(
+            run_id,
+            "chapter_script_feedback.json",
+            [feedback.model_dump(mode="json") for feedback in feedbacks],
+        )
+
+    def _assert_script_reviews_approved(self, run_id: str) -> None:
+        reviews = self._read_script_reviews(run_id)
+        cards = self._read_chapter_script_cards(run_id)
+        cards_by_id = {card.chapter_id for card in cards}
+        blocked = [
+            review.chapter_id
+            for review in reviews
+            if review.status != "approved" or review.chapter_id not in cards_by_id
+        ]
+        if not reviews or not cards:
+            raise WorkflowValidationError(
+                "Chapter script cards must be generated before continuity merge."
+            )
+        if blocked:
+            raise WorkflowValidationError(
+                "All chapter script cards must be approved before continuity merge."
+            )
+
+    def _generate_chapter_script_cards_for_review(
+        self,
+        run_id: str,
+        author_controls: AuthorControls,
+    ) -> None:
+        state = self._load_generation_state(run_id, author_controls)
+        chapters = [Chapter.model_validate(item) for item in state["chapters"]]
+        chapter_cards = [
+            ChapterCard.model_validate(item) for item in state["chapter_cards"]
+        ]
+        reviews = [
+            ChapterReview.model_validate(item)
+            for item in self.store.read_json(run_id, "chapter_reviews.json")
+        ]
+        approved_ids = {
+            review.chapter_id
+            for review in reviews
+            if review.status == "approved"
+        }
+        if len(approved_ids) < 3:
+            raise WorkflowValidationError(
+                "Chapter summary cards must be approved before script cards can be generated."
+            )
+        story_bible = StoryBible.model_validate(state["story_bible"])
+        adaptation_plan = AdaptationPlan.model_validate(state["adaptation_plan"])
+        scope = set(story_bible.recommended_generation_scope or [1, 2, 3])
+        source_cards = [
+            card
+            for card in chapter_cards
+            if card.chapter_id in approved_ids and card.chapter_index in scope
+        ] or [card for card in chapter_cards if card.chapter_id in approved_ids][:3]
+        chapters_by_id = {f"ch_{chapter.index:03d}": chapter for chapter in chapters}
+        script_reviews = [
+            ChapterScriptReview(chapter_id=card.chapter_id, status="pending")
+            for card in source_cards
+        ]
+        self._write_script_reviews(run_id, script_reviews)
+        self.store.set_stage(
+            run_id,
+            "generate_chapter_script_cards",
+            "running",
+            message=f"Generating {len(source_cards)} chapter script cards.",
+            run_status=RunStatus.generating_chapter_scripts,
+        )
+        script_cards: list[dict[str, Any]] = []
+        for card in source_cards:
+            chapter = chapters_by_id.get(card.chapter_id)
+            if chapter is None:
+                continue
+            script_reviews = [
+                review.model_copy(update={"status": "generating", "error": None})
+                if review.chapter_id == card.chapter_id
+                else review
+                for review in script_reviews
+            ]
+            self._write_script_reviews(run_id, script_reviews)
+            raw_script_card = (
+                self._mock_chapter_script_card(
+                    chapter,
+                    card,
+                    adaptation_plan,
+                    author_controls,
+                    [],
+                )
+                if self.llm.mock
+                else self._remote_chapter_script_card(
+                    chapter,
+                    card,
+                    adaptation_plan,
+                    author_controls,
+                    [],
+                )
+            )
+            script_card = ChapterScriptCard.model_validate(raw_script_card).model_dump(mode="json")
+            script_cards.append(script_card)
+            self.store.write_json(run_id, "chapter_script_cards.json", script_cards)
+            script_reviews = [
+                review.model_copy(update={"status": "ready", "error": None})
+                if review.chapter_id == card.chapter_id
+                else review
+                for review in script_reviews
+            ]
+            self._write_script_reviews(run_id, script_reviews)
+            self._append_workflow_event(
+                run_id,
+                "chapter_script_card_ready",
+                {"chapter_id": card.chapter_id},
+            )
+        self.store.remove_artifacts(
+            run_id,
+            [
+                "script.json",
+                "script.yaml",
+                "schema.json",
+                "schema.md",
+                "adaptation_report.md",
+                "report.json",
+                "continuity_report.md",
+            ],
+        )
+        self.store.set_stage(
+            run_id,
+            "generate_chapter_script_cards",
+            "succeeded",
+            message=f"Created {len(script_cards)} chapter script cards.",
+        )
+        self.store.set_stage(
+            run_id,
+            "awaiting_script_review",
+            "succeeded",
+            message="Chapter script cards are ready for author review.",
+            run_status=RunStatus.awaiting_script_review,
+        )
+
+    @staticmethod
+    def _infer_feedback_target(
+        complaint: str,
+        cards: list[ChapterScriptCard],
+    ) -> tuple[str | None, str | None]:
+        for card in cards:
+            markers = [
+                *_chapter_number_markers(card.chapter_index),
+                card.chapter_id,
+                card.title,
+            ]
+            if any(marker and marker in complaint for marker in markers):
+                scene_id = card.scenes[0].id if card.scenes else None
+                return card.chapter_id, scene_id
+        for card in cards:
+            for scene in card.scenes:
+                if scene.title and scene.title in complaint:
+                    return card.chapter_id, scene.id
+        if cards:
+            first = cards[0]
+            return first.chapter_id, first.scenes[0].id if first.scenes else None
+        return None, None
 
     def _append_workflow_event(
         self, run_id: str, event_type: str, payload: dict[str, Any]
@@ -554,7 +1069,22 @@ class AdaptationWorkflow:
         chapters = [Chapter.model_validate(item) for item in state["chapters"]]
         author_controls = AuthorControls.model_validate(state.get("author_controls") or {})
         adaptation_plan = AdaptationPlan.model_validate(state["adaptation_plan"])
-        if self.llm.mock:
+        if state.get("chapter_script_cards"):
+            payload = self._script_from_chapter_script_cards(
+                chapters,
+                [
+                    ChapterScriptCard.model_validate(item)
+                    for item in state["chapter_script_cards"]
+                ],
+                adaptation_plan,
+                author_controls,
+                (
+                    ScriptFeedback.model_validate(state["final_feedback"])
+                    if state.get("final_feedback")
+                    else None
+                ),
+            )
+        elif self.llm.mock:
             payload = self._mock_script(
                 chapters, state["planner_output"], adaptation_plan, author_controls
             )
@@ -1139,6 +1669,228 @@ class AdaptationWorkflow:
             ],
         }
 
+    def _mock_chapter_script_card(
+        self,
+        chapter: Chapter,
+        chapter_card: ChapterCard,
+        adaptation_plan: AdaptationPlan,
+        controls: AuthorControls,
+        feedbacks: list[ScriptFeedback],
+    ) -> dict[str, Any]:
+        scene_plan = next(
+            (
+                scene
+                for scene in adaptation_plan.scene_plan
+                if chapter.index in scene.source_chapters
+            ),
+            None,
+        )
+        scene_id = f"sc_{chapter.index:03d}"
+        source_excerpt = (
+            chapter_card.source_quotes[0].quote
+            if chapter_card.source_quotes
+            else chapter_card.summary
+        )
+        location_id = "loc_archive" if chapter.index == 1 else "loc_theater"
+        characters = ["char_linxia"] if chapter.index == 1 else ["char_linxia", "char_zhouyan"]
+        feedback_notes = [
+            item.complaint if not item.desired_change else f"{item.complaint}；希望：{item.desired_change}"
+            for item in feedbacks
+        ]
+        title = scene_plan.title if scene_plan else chapter_card.title
+        purpose = (
+            scene_plan.dramatic_purpose
+            if scene_plan
+            else f"把 {chapter_card.title} 的核心事件改成可表演场面。"
+        )
+        conflict = (
+            scene_plan.conflict
+            if scene_plan and scene_plan.conflict
+            else (chapter_card.conflicts[0] if chapter_card.conflicts else "主角要在犹豫和行动之间做选择。")
+        )
+        emotional_shift = (
+            scene_plan.emotional_shift
+            if scene_plan and scene_plan.emotional_shift
+            else "从迟疑到决定推进。"
+        )
+        action_text = (
+            f"林夏把“{chapter_card.clues[0] if chapter_card.clues else chapter_card.title}”摆到灯下，"
+            f"用实际动作确认这一章的关键线索。"
+        )
+        if feedback_notes:
+            action_text += f" 她停下来，按作者反馈重新处理：{feedback_notes[-1]}"
+        dialogue = (
+            "这条线索不能只停在心里，我要让它变成下一步行动。"
+            if chapter.index == 1
+            else "如果你还知道别的，就不要只把答案藏在沉默里。"
+        )
+        scene = {
+            "id": scene_id,
+            "title": title,
+            "source_chapters": [chapter.index],
+            "source_excerpt": source_excerpt[:220],
+            "source_function": (
+                scene_plan.source_function
+                if scene_plan and scene_plan.source_function
+                else chapter_card.summary
+            ),
+            "location_id": location_id,
+            "time_of_day": "night",
+            "characters": characters,
+            "purpose": purpose,
+            "scene_purpose": purpose,
+            "conflict": conflict,
+            "emotional_shift": emotional_shift,
+            "adaptation_reason": (
+                scene_plan.adaptation_reason
+                if scene_plan and scene_plan.adaptation_reason
+                else "把章节里的心理和叙述转成观众能看见的行动、停顿和对白。"
+            ),
+            "performance_notes": (
+                scene_plan.performance_notes
+                if scene_plan and scene_plan.performance_notes
+                else "用物件、走位和沉默反应替代长段解释。"
+            ),
+            "risk_note": (
+                scene_plan.risk_note
+                if scene_plan and scene_plan.risk_note
+                else "避免让角色直接复述设定，优先保留行动压力。"
+            ),
+            "production_risk": "如果只解释本章含义，场面会变静态，需要用阻力或道具动作维持节奏。",
+            "format_type": controls.format_type.value,
+            "actions": [
+                {
+                    "text": action_text,
+                    "beat": "adaptation",
+                    "origin": "ai_adapted",
+                }
+            ],
+            "dialogues": [
+                {
+                    "speaker_id": "char_linxia",
+                    "line": dialogue,
+                    "emotion": "controlled",
+                    "origin": "ai_adapted",
+                }
+            ],
+            "ai_added_content": [
+                "增加可见行动，把章节理解卡里的心理判断外化。"
+            ],
+            "revision_suggestions": [
+                "如果作者觉得不忠实，优先检查本场的线索、人物动机和结尾钩子。"
+            ],
+            "adaptation_notes": [
+                f"来源于 {chapter_card.chapter_id} 章节理解卡。",
+                *feedback_notes,
+            ],
+        }
+        return ChapterScriptCard(
+            chapter_id=chapter_card.chapter_id,
+            chapter_index=chapter.index,
+            title=chapter_card.title,
+            summary=f"{chapter_card.title} 被改成 1 场可表演戏：{purpose}",
+            scenes=[scene],
+            opening_bridge=(
+                "承接上一章的未解线索。"
+                if chapter.index > 1
+                else "从主角第一次接触核心线索开始。"
+            ),
+            ending_hook=(
+                chapter_card.continuity_notes[0]
+                if chapter_card.continuity_notes
+                else "留下下一章继续推进的行动钩子。"
+            ),
+            continuity_links=[
+                "合成阶段会检查本章结尾是否自然接到下一章开场。",
+                *chapter_card.continuity_notes[:2],
+            ],
+            absorbed_feedback=feedback_notes,
+            revision_notes=[
+                "本卡只负责本章剧本化，跨章顺序和过渡在连贯性合成阶段处理。"
+            ],
+            format_type=controls.format_type,
+        ).model_dump(mode="json")
+
+    def _script_from_chapter_script_cards(
+        self,
+        chapters: list[Chapter],
+        script_cards: list[ChapterScriptCard],
+        adaptation_plan: AdaptationPlan,
+        controls: AuthorControls,
+        feedback: ScriptFeedback | None,
+    ) -> dict[str, Any]:
+        scenes = [
+            scene.model_dump(mode="json")
+            for card in sorted(script_cards, key=lambda item: item.chapter_index)
+            for scene in card.scenes
+        ]
+        feedback_note = (
+            f"本次合成已吸收作者最终反馈：{feedback.complaint}"
+            if feedback
+            else "本次合成基于作者已通过的逐章剧本卡。"
+        )
+        return {
+            "metadata": {
+                "title": "逐章合成剧本初稿",
+                "source_chapter_count": len(chapters),
+                "language": "zh-CN",
+                "genre": "悬疑剧情",
+                "logline": "主角沿着章节线索逐步追查真相，每章剧本卡被合成为连续可拍段落。",
+            },
+            "adaptation_profile": controls.model_dump(mode="json"),
+            "adaptation_strategy": [
+                adaptation_plan.summary,
+                "最终剧本只来自已通过的章节剧本卡，不从简介卡直接发散。",
+                "连贯性合成只调整过渡、节奏提示和衔接说明，不擅自推翻已通过章节核心剧情。",
+                feedback_note,
+            ],
+            "characters": [
+                {
+                    "id": "char_linxia",
+                    "name": "林夏",
+                    "role": "主角",
+                    "description": "谨慎但逐渐主动的追查者，把父亲留下的线索变成行动。",
+                    "first_appearance_chapter": 1,
+                },
+                {
+                    "id": "char_zhouyan",
+                    "name": "周砚",
+                    "role": "知情者",
+                    "description": "与旧剧院和父亲过去有关的知情者，推动主角接近真相。",
+                    "first_appearance_chapter": 2,
+                },
+            ],
+            "locations": [
+                {
+                    "id": "loc_archive",
+                    "name": "城南档案馆",
+                    "description": "主角发现第一条线索的旧档案空间。",
+                },
+                {
+                    "id": "loc_theater",
+                    "name": "旧剧院",
+                    "description": "承载父亲过去和线索链的核心场景。",
+                },
+            ],
+            "props": [
+                {
+                    "id": "prop_letter",
+                    "name": "没有编号的信",
+                    "description": "推动主角开始追查的信件。",
+                },
+                {
+                    "id": "prop_script",
+                    "name": "旧剧本",
+                    "description": "把文本线索转成可见解谜动作的道具。",
+                },
+            ],
+            "scenes": scenes,
+            "adaptation_notes": [
+                feedback_note,
+                "每场戏保留来源章节、原文功能、改编理由和可继续打磨建议。",
+            ],
+        }
+
     def _remote_reader_output(self, chapters: list[Chapter]) -> dict[str, Any]:
         return self._remote_json(
             "Extract characters, locations, events, and props. Return JSON only matching the provided ReaderOutput schema.",
@@ -1159,6 +1911,31 @@ class AdaptationWorkflow:
                 "schema": ChapterCard.model_json_schema(),
                 "chapter": chapter.model_dump(mode="json"),
                 "chapter_id": f"ch_{chapter.index:03d}",
+            },
+        )
+
+    def _remote_chapter_script_card(
+        self,
+        chapter: Chapter,
+        chapter_card: ChapterCard,
+        adaptation_plan: AdaptationPlan,
+        author_controls: AuthorControls,
+        feedbacks: list[ScriptFeedback],
+    ) -> dict[str, Any]:
+        return self._remote_json(
+            (
+                "你是小说改编副编剧。请只把当前这一章改成 ChapterScriptCard。"
+                "返回严格匹配 ChapterScriptCard schema 的 JSON。所有展示给作者的字段必须使用简体中文。"
+                "不要直接生成最终 YAML，不要改写其他章节。每张卡至少包含一场戏，并说明 opening_bridge、"
+                "ending_hook、continuity_links 和 absorbed_feedback。若有作者反馈，必须明确吸收。"
+            ),
+            {
+                "schema": ChapterScriptCard.model_json_schema(),
+                "chapter": chapter.model_dump(mode="json"),
+                "chapter_card": chapter_card.model_dump(mode="json"),
+                "adaptation_plan": adaptation_plan.model_dump(mode="json"),
+                "author_controls": author_controls.model_dump(mode="json"),
+                "feedback": [item.model_dump(mode="json") for item in feedbacks],
             },
         )
 
@@ -1282,6 +2059,7 @@ def _report_markdown(report: ValidationReport, state: WorkflowState) -> str:
     controls = AuthorControls.model_validate(state.get("author_controls") or {})
     plan = AdaptationPlan.model_validate(state.get("adaptation_plan") or {})
     story_bible = StoryBible.model_validate(state.get("story_bible") or {})
+    script_card_count = len(state.get("chapter_script_cards") or [])
     lines = [
         "# 改编报告",
         "",
@@ -1301,6 +2079,7 @@ def _report_markdown(report: ValidationReport, state: WorkflowState) -> str:
         f"- Story Bible 主线: {story_bible.main_plot}",
         f"- 推荐生成范围: 第 {', '.join(str(item) for item in plan.recommended_generation_scope)} 章",
         f"- 使用章节理解卡: `{len(story_bible.chapter_index)}` 张",
+        f"- 使用章节剧本卡: `{script_card_count}` 张",
         *[f"- {item}" for item in plan.technical_notes],
         "",
         "## 校验问题",
@@ -1313,6 +2092,39 @@ def _report_markdown(report: ValidationReport, state: WorkflowState) -> str:
             lines.append(f"- **{issue.severity.value}** `{issue.path}`: {issue.message}")
             if issue.suggestion:
                 lines.append(f"  建议: {issue.suggestion}")
+    return "\n".join(lines) + "\n"
+
+
+def _continuity_report_markdown(
+    script_cards: list[ChapterScriptCard],
+    feedback: ScriptFeedback | None,
+) -> str:
+    lines = [
+        "# 连贯性合成报告",
+        "",
+        "## 合成原则",
+        "",
+        "- 只使用作者已通过的章节剧本卡作为剧本来源。",
+        "- 合成阶段重点检查章节之间的开场承接、结尾钩子、人物动机和线索连续性。",
+        "- 不擅自推翻单章已通过的核心剧情；如果要改某章，先回到章节剧本卡重写。",
+        "",
+        "## 已合成章节",
+        "",
+    ]
+    for card in sorted(script_cards, key=lambda item: item.chapter_index):
+        lines.append(f"- `{card.chapter_id}` {card.title}: {card.opening_bridge} -> {card.ending_hook}")
+    if feedback:
+        lines.extend(
+            [
+                "",
+                "## 本次返修反馈",
+                "",
+                f"- 类型: `{feedback.target_type}`",
+                f"- 作者不满意点: {feedback.complaint}",
+                f"- 希望调整: {feedback.desired_change or '未填写'}",
+                f"- AI 判断: {feedback.ai_assessment}",
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 
