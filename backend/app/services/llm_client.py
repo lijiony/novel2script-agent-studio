@@ -69,3 +69,24 @@ class LlmClient:
         if not content:
             raise RuntimeError("LLM returned empty content.")
         return json.loads(content)
+
+    def generate_text(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
+        if self.mock:
+            raise RuntimeError("Mock LLM does not generate remote text.")
+        if self.client is None:
+            raise RuntimeError("LLM client is not configured.")
+        response = self.client.chat.completions.create(
+            model=self.settings.openai_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(user_payload, ensure_ascii=False),
+                },
+            ],
+            temperature=0.4,
+        )
+        content = response.choices[0].message.content
+        if not content:
+            raise RuntimeError("LLM returned empty content.")
+        return content.strip()
