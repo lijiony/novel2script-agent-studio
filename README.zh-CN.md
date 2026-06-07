@@ -1,16 +1,16 @@
 # Novel2Script Agent Studio
 
-> Demo 视频：待补充。
+> 演示视频：[哔哩哔哩 72 小时 Demo 讲解](https://b23.tv/8aTHmco)
+> 在线页面：[Netlify 项目页面](https://novel2script-agent-studio-lijiony.netlify.app/)
+> YAML Schema 附件：[docs/schema.md](docs/schema.md)
 
 语言：[English](README.md) | 简体中文
-
-Schema：[剧本 YAML Schema 设计文档](docs/schema.md)
 
 Novel2Script Agent Studio 是一个轻状态、无数据库的 AI 改编副编剧工作台。它帮助作者把 3 章以上小说文本改编成可表演、可编辑、可追踪的剧本 YAML 初稿。
 
 项目不会一上来直接交最终 YAML，而是先理解小说、生成章节理解卡和改编计划，再让作者选择剧本类型、风格偏向、改编尺度、保留内容、禁止改动内容和备注，最后生成逐章剧本卡，并在作者确认后做连贯性合成。
 
-后端使用固定 LangGraph 工作流，Pydantic v2 作为 Schema 唯一真源，结构化 JSON 经校验后由 `ruamel.yaml` 导出 YAML。前端提供类 Codex 的任务工作台、章节/剧本卡确认、YAML 编辑、校验和下载。
+后端使用固定 LangGraph 工作流，Pydantic v2 作为 Schema 唯一真源，结构化 JSON 经校验后由 `ruamel.yaml` 导出 YAML。前端提供任务式创作工作台、章节/剧本卡确认、YAML 编辑、校验和下载。
 
 ## 核心功能
 

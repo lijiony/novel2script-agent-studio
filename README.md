@@ -1,10 +1,10 @@
 # Novel2Script Agent Studio
 
-> Demo video: coming soon.
+> Demo video: [Bilibili 72-hour walkthrough](https://b23.tv/8aTHmco)
+> Live preview: [Netlify project page](https://novel2script-agent-studio-lijiony.netlify.app/)
+> YAML Schema document: [docs/schema.md](docs/schema.md)
 
 Language: English | [简体中文](README.zh-CN.md)
-
-Schema: [YAML Schema Design](docs/schema.md)
 
 Novel2Script Agent Studio is a lightweight, stateless AI co-writer workbench that helps authors adapt 3+ chapters of novel text into a performable, editable, and traceable screenplay YAML draft. It first analyzes the novel and proposes an adaptation plan, then lets the author choose script format, style focus, adaptation scale, preserved content, forbidden changes, and notes before generation.
 
@@ -96,7 +96,7 @@ Open `http://localhost:3000`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/runs` | List local run tasks for the Codex-style sidebar |
+| `GET` | `/api/runs` | List local run tasks for the workspace sidebar |
 | `POST` | `/api/runs/intake` | Create a run, validate chapters, and generate chapter understanding cards |
 | `GET` | `/api/runs/{run_id}/chapter-reviews` | Read chapter cards and author review state |
 | `POST` | `/api/runs/{run_id}/chapter-cards/approve-all` | Approve all chapter understanding cards |
