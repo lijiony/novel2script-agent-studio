@@ -3,7 +3,7 @@
 语言：[English](README.md) | 简体中文
 
 > 演示视频：[哔哩哔哩 72 小时 Demo 讲解](https://b23.tv/8aTHmco)
-> 在线页面：[Netlify 项目页面](https://novel2script-agent-studio-lijiony.netlify.app/)
+> 在线页面：[Netlify 项目页面](https://novel2script-agent-studio-lijiony.netlify.app/)（仅展示页面效果，具体功能可看页面展示和视频内容）
 > YAML Schema 附件：[docs/schema.md](docs/schema.md)
 
 Novel2Script Agent Studio 是一个轻状态、无数据库的 AI 改编副编剧工作台。它帮助作者把 3 章以上小说文本改编成可表演、可编辑、可追踪的剧本 YAML 初稿。
