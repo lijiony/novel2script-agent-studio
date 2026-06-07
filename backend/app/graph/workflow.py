@@ -1,3 +1,4 @@
+import re
 from typing import Any
 from uuid import uuid4
 from langgraph.graph import END, StateGraph
@@ -239,7 +240,7 @@ class AdaptationWorkflow:
                 if self.llm.mock
                 else self._remote_chapter_card(chapter, feedback_notes=feedback_notes)
             )
-            new_card = ChapterCard.model_validate(raw_card).model_dump(mode="json")
+            new_card = ChapterCard.model_validate(raw_card, extra="ignore").model_dump(mode="json")
             current_cards = [
                 ChapterCard.model_validate(item).model_dump(mode="json")
                 for item in self.store.read_json(run_id, "chapter_cards.json")
@@ -457,7 +458,10 @@ class AdaptationWorkflow:
                     [feedback_model] if feedback_model else [],
                 )
             )
-            new_card = ChapterScriptCard.model_validate(raw_card).model_dump(mode="json")
+            new_card = ChapterScriptCard.model_validate(
+                self._normalize_chapter_script_card_payload(raw_card),
+                extra="ignore",
+            ).model_dump(mode="json")
             current_cards = [
                 card.model_dump(mode="json") for card in self._read_chapter_script_cards(run_id)
             ]
@@ -993,7 +997,10 @@ class AdaptationWorkflow:
                     [],
                 )
             )
-            script_card = ChapterScriptCard.model_validate(raw_script_card).model_dump(mode="json")
+            script_card = ChapterScriptCard.model_validate(
+                self._normalize_chapter_script_card_payload(raw_script_card),
+                extra="ignore",
+            ).model_dump(mode="json")
             script_cards.append(script_card)
             self.store.write_json(run_id, "chapter_script_cards.json", script_cards)
             script_reviews = [
@@ -1126,7 +1133,7 @@ class AdaptationWorkflow:
                     if self.llm.mock
                     else self._remote_chapter_card(chapter)
                 )
-                card = ChapterCard.model_validate(raw_card).model_dump(mode="json")
+                card = ChapterCard.model_validate(raw_card, extra="ignore").model_dump(mode="json")
                 cards_by_id[chapter_id] = card
                 reviews = [
                     review.model_copy(update={"status": "ready", "error": None})
@@ -1173,7 +1180,7 @@ class AdaptationWorkflow:
             raw_story_bible = self._mock_story_bible(chapter_cards)
         else:
             raw_story_bible = self._remote_story_bible(state["chapter_cards"])
-        story_bible = StoryBible.model_validate(raw_story_bible).model_dump(mode="json")
+        story_bible = StoryBible.model_validate(raw_story_bible, extra="ignore").model_dump(mode="json")
         self.store.write_json(state["run_id"], "story_bible.json", story_bible)
         self.store.write_text(state["run_id"], "story_bible.md", _story_bible_markdown(story_bible))
         self._finish_stage(
@@ -1190,7 +1197,7 @@ class AdaptationWorkflow:
             raw_reader_output = self._mock_reader_output(chapters)
         else:
             raw_reader_output = self._remote_reader_output(chapters)
-        reader_output = ReaderOutput.model_validate(raw_reader_output).model_dump(mode="json")
+        reader_output = ReaderOutput.model_validate(raw_reader_output, extra="ignore").model_dump(mode="json")
         self.store.write_json(state["run_id"], "reader_output.json", reader_output)
         self._finish_stage(state, "extract_story_facts", "Story facts extracted.")
         return {**state, "reader_output": reader_output}
@@ -1208,7 +1215,10 @@ class AdaptationWorkflow:
             raw_planner_output = self._remote_planner_output(
                 state["reader_output"], state["chapter_cards"], state["story_bible"]
             )
-        planner_output = PlannerOutput.model_validate(raw_planner_output).model_dump(mode="json")
+        planner_output = PlannerOutput.model_validate(
+            self._normalize_planner_output_payload(raw_planner_output),
+            extra="ignore",
+        ).model_dump(mode="json")
         adaptation_plan = self._build_adaptation_plan(
             chapters,
             state["reader_output"],
@@ -2078,28 +2088,36 @@ class AdaptationWorkflow:
         }
         character_aliases = {
             "林夏": "char_linxia",
+            "char_林夏": "char_linxia",
             "char_lin_xia": "char_linxia",
             "char_linxia": "char_linxia",
             "周砚": "char_zhouyan",
+            "char_周砚": "char_zhouyan",
             "char_zhou_yan": "char_zhouyan",
             "char_zhouyan": "char_zhouyan",
             "母亲": "char_mother",
+            "char_母亲": "char_mother",
             "char_mother": "char_mother",
             "char_muqin": "char_mother",
             "父亲": "char_father",
+            "char_父亲": "char_father",
             "char_father": "char_father",
             "char_fuqin": "char_father",
         }
         location_aliases = {
             "城南档案馆": "loc_archive",
+            "loc_城南档案馆": "loc_archive",
             "旧剧院": "loc_theater",
+            "loc_旧剧院": "loc_theater",
             "loc_old_theater": "loc_theater",
             "loc_jiujuyuan": "loc_theater",
             "城北钟楼": "loc_clocktower",
+            "loc_城北钟楼": "loc_clocktower",
             "loc_clock_tower": "loc_clocktower",
             "loc_clocktower": "loc_clocktower",
             "loc_zhonglou": "loc_clocktower",
             "林夏家": "loc_home",
+            "loc_林夏家": "loc_home",
             "loc_home": "loc_home",
         }
         character_names = {
@@ -2153,9 +2171,100 @@ class AdaptationWorkflow:
             scene["characters"] = normalized_characters
         return scenes, list(characters.values()), list(locations.values())
 
+    def _normalize_chapter_script_card_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        next_payload = {**payload}
+        scenes = [
+            {**scene, "dialogues": [dict(dialogue) for dialogue in scene.get("dialogues", [])]}
+            for scene in next_payload.get("scenes", []) or []
+            if isinstance(scene, dict)
+        ]
+        for index, scene in enumerate(scenes, start=1):
+            scene_id = str(scene.get("id") or "")
+            if not re.fullmatch(r"sc_[0-9]{3}", scene_id):
+                chapter_index = int(next_payload.get("chapter_index") or 1)
+                scene["id"] = f"sc_{chapter_index if len(scenes) == 1 else chapter_index * 10 + index:03d}"
+        normalized_scenes, _, _ = self._normalize_script_references(scenes)
+        next_payload["scenes"] = normalized_scenes
+        return next_payload
+
+    def _normalize_planner_output_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        next_payload = {**payload}
+        scenes: list[dict[str, Any]] = []
+        for index, raw_scene in enumerate(next_payload.get("scenes", []) or [], start=1):
+            if not isinstance(raw_scene, dict):
+                continue
+            scene = {**raw_scene}
+            scene_id = str(scene.get("id") or "")
+            if not re.fullmatch(r"sc_[0-9]{3}", scene_id):
+                scene["id"] = f"sc_{index:03d}"
+            scene["title"] = self._stringify_llm_value(scene.get("title") or f"场景 {index}")
+            scene["dramatic_purpose"] = self._stringify_llm_value(
+                scene.get("dramatic_purpose")
+                or scene.get("source_function")
+                or scene.get("title")
+                or "把本章核心事件转成可表演场面。"
+            )
+            for key in (
+                "conflict",
+                "emotional_shift",
+                "source_excerpt",
+                "source_function",
+                "adaptation_treatment",
+                "adaptation_reason",
+                "performance_notes",
+                "risk_note",
+            ):
+                scene[key] = self._stringify_llm_value(scene.get(key) or "")
+            scene["key_events"] = [
+                self._stringify_llm_value(item)
+                for item in scene.get("key_events", []) or []
+            ]
+            scenes.append(scene)
+        next_payload["scenes"] = scenes
+        return next_payload
+
+    @staticmethod
+    def _stringify_llm_value(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            preferred = [
+                value.get(key)
+                for key in ("quote", "text", "summary", "reason", "description", "value")
+                if value.get(key)
+            ]
+            if preferred:
+                return "；".join(AdaptationWorkflow._stringify_llm_value(item) for item in preferred)
+            return "；".join(
+                f"{key}: {AdaptationWorkflow._stringify_llm_value(item)}"
+                for key, item in value.items()
+            )
+        if isinstance(value, list):
+            return "；".join(AdaptationWorkflow._stringify_llm_value(item) for item in value)
+        return str(value)
+
     @staticmethod
     def _canonical_reference_id(value: str, aliases: dict[str, str]) -> str:
-        return aliases.get(value, value)
+        canonical = aliases.get(value)
+        if canonical:
+            return canonical
+        expected_prefix = next(
+            (
+                prefix
+                for prefix in ("char", "loc", "prop")
+                if aliases and all(item.startswith(f"{prefix}_") for item in aliases.values())
+            ),
+            None,
+        )
+        if expected_prefix is None:
+            return value
+        if re.fullmatch(rf"{expected_prefix}_[a-zA-Z0-9_]+", value):
+            return value
+        raw_value = value.split("_", 1)[1] if value.startswith(f"{expected_prefix}_") else value
+        slug = re.sub(r"[^a-zA-Z0-9_]+", "_", raw_value).strip("_").lower()
+        return f"{expected_prefix}_{slug or 'unknown'}"
 
     @staticmethod
     def _fallback_reference_name(value: str, fallback: str) -> str:

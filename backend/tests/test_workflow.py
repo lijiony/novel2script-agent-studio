@@ -3,6 +3,7 @@ from app.domain.schemas import (
     AdaptationPlan,
     AuthorControls,
     ChapterCard,
+    ChapterScriptCard,
     PlannerOutput,
     ReaderOutput,
     RunStatus,
@@ -287,6 +288,90 @@ def test_script_reference_normalization_accepts_real_model_aliases(tmp_path):
         "char_mother",
     }
     assert {location["id"] for location in locations} >= {"loc_clocktower"}
+
+
+def test_chapter_script_payload_normalizes_real_model_ids_before_validation(tmp_path):
+    settings = Settings(USE_MOCK_LLM=True, RUNS_DIR=tmp_path)
+    store = RunStore(tmp_path)
+    workflow = AdaptationWorkflow(settings, store)
+
+    payload = {
+        "chapter_id": "ch_001",
+        "chapter_index": 1,
+        "title": "线索显影",
+        "summary": "林夏和周砚把旧剧院线索转成可表演动作。",
+        "scenes": [
+            {
+                "id": "scene_1",
+                "title": "旧剧院后台",
+                "source_chapters": [1],
+                "source_excerpt": "林夏发现父亲留下的线索。",
+                "source_function": "发现线索，推动追查。",
+                "location_id": "loc_旧剧院",
+                "time_of_day": "night",
+                "characters": ["char_林夏"],
+                "purpose": "让主角做出继续追查的决定。",
+                "scene_purpose": "把心理判断外化为行动。",
+                "conflict": "线索真假不明，周砚不愿说明。",
+                "emotional_shift": "从怀疑到决定追查。",
+                "production_risk": "避免只用台词解释线索。",
+                "actions": [{"text": "林夏把旧门票压在灯下。"}],
+                "dialogues": [
+                    {"speaker_id": "char_林夏", "line": "我要知道父亲当年去了哪里。"},
+                    {"speaker_id": "char_周砚", "line": "那你就别只看票面。"},
+                ],
+            }
+        ],
+        "opening_bridge": "从第一条线索开始。",
+        "ending_hook": "旧剧院钟声响起。",
+        "continuity_links": ["后续章节继续追查父亲失踪。"],
+        "absorbed_feedback": [],
+        "revision_notes": [],
+        "format_type": "short_drama",
+    }
+
+    normalized = workflow._normalize_chapter_script_card_payload(payload)  # noqa: SLF001
+    card = ChapterScriptCard.model_validate(normalized)
+
+    assert card.scenes[0].id == "sc_001"
+    assert card.scenes[0].location_id == "loc_theater"
+    assert card.scenes[0].characters == ["char_linxia", "char_zhouyan"]
+    assert card.scenes[0].dialogues[0].speaker_id == "char_linxia"
+    assert card.scenes[0].dialogues[1].speaker_id == "char_zhouyan"
+
+
+def test_planner_output_payload_stringifies_structured_excerpts(tmp_path):
+    settings = Settings(USE_MOCK_LLM=True, RUNS_DIR=tmp_path)
+    store = RunStore(tmp_path)
+    workflow = AdaptationWorkflow(settings, store)
+
+    normalized = workflow._normalize_planner_output_payload(  # noqa: SLF001
+        {
+            "scenes": [
+                {
+                    "id": "scene_1",
+                    "title": {"text": "旧剧院线索显影"},
+                    "source_chapters": [1],
+                    "dramatic_purpose": {"summary": "让林夏决定继续追查。"},
+                    "key_events": [{"summary": "发现父亲留下的线索"}],
+                    "source_excerpt": {
+                        "quote": "林夏在旧剧院发现父亲留下的线索。",
+                        "reason": "这是本章核心事件与悬念。",
+                    },
+                }
+            ]
+        }
+    )
+
+    planner_output = PlannerOutput.model_validate(normalized)
+
+    assert planner_output.scenes[0].id == "sc_001"
+    assert planner_output.scenes[0].title == "旧剧院线索显影"
+    assert planner_output.scenes[0].dramatic_purpose == "让林夏决定继续追查。"
+    assert planner_output.scenes[0].key_events == ["发现父亲留下的线索"]
+    assert planner_output.scenes[0].source_excerpt == (
+        "林夏在旧剧院发现父亲留下的线索。；这是本章核心事件与悬念。"
+    )
 
 
 def test_regenerate_chapter_only_updates_target_card(tmp_path):

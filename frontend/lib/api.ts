@@ -1,6 +1,39 @@
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
+export async function checkBackendHealth(): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/health`, {
+      cache: "no-store",
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export function friendlyErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const message = raw.trim();
+  const lower = message.toLowerCase();
+  if (!message || lower === "failed to fetch" || lower.includes("networkerror")) {
+    return `后端服务暂时连不上。请确认 ${API_BASE_URL} 已启动，然后重试。`;
+  }
+  if (lower.includes("at least 3 chapter") || lower.includes("至少需要")) {
+    return "至少需要 3 章小说正文，系统才能先拆章理解。";
+  }
+  if (lower.includes("generation_scope") || lower.includes("生成范围")) {
+    return "请先选择要生成剧本卡的章节范围。";
+  }
+  if (lower.includes("streaming response is empty")) {
+    return "AI 回复流没有返回内容，请稍后重试。";
+  }
+  if (lower.includes("failed_llm") || lower.includes("model") || lower.includes("llm")) {
+    return "模型调用遇到问题，请检查模型设置后重试。";
+  }
+  return message;
+}
+
 export type RunStage = {
   name: string;
   status: "pending" | "running" | "succeeded" | "failed";
@@ -236,7 +269,7 @@ export type ChapterChatMessagesResponse = {
 };
 
 export async function listRuns(): Promise<RunListItem[]> {
-  const response = await fetch(`${API_BASE_URL}/api/runs`);
+  const response = await apiFetch(`${API_BASE_URL}/api/runs`);
   if (!response.ok) {
     throw new Error(await errorText(response));
   }
@@ -251,7 +284,7 @@ export async function intakeRun(text: string, file?: File | null): Promise<RunIn
   } else {
     form.append("text", text);
   }
-  const response = await fetch(`${API_BASE_URL}/api/runs/intake`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/intake`, {
     method: "POST",
     body: form,
   });
@@ -266,7 +299,7 @@ export async function generateRun(
   runId: string,
   controls: AuthorControls,
 ): Promise<RunInfo> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/generate`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/generate`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -281,7 +314,7 @@ export async function generateRun(
 }
 
 export async function getChapterScriptReviews(runId: string): Promise<ChapterScriptReviewsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-reviews`);
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-reviews`);
   if (!response.ok) {
     throw new Error(await errorText(response));
   }
@@ -289,7 +322,7 @@ export async function getChapterScriptReviews(runId: string): Promise<ChapterScr
 }
 
 export async function approveChapterScript(runId: string, chapterId: string): Promise<ChapterScriptReviewsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/${chapterId}/approve`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/${chapterId}/approve`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -299,7 +332,7 @@ export async function approveChapterScript(runId: string, chapterId: string): Pr
 }
 
 export async function approveAllChapterScripts(runId: string): Promise<ChapterScriptReviewsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/approve-all`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/approve-all`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -309,7 +342,7 @@ export async function approveAllChapterScripts(runId: string): Promise<ChapterSc
 }
 
 export async function regenerateChapterScript(runId: string, chapterId: string): Promise<ChapterScriptReviewsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/${chapterId}/regenerate`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/${chapterId}/regenerate`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -319,7 +352,7 @@ export async function regenerateChapterScript(runId: string, chapterId: string):
 }
 
 export async function continuityMerge(runId: string): Promise<RunInfo> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/continuity-merge`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/continuity-merge`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -330,7 +363,7 @@ export async function continuityMerge(runId: string): Promise<RunInfo> {
 }
 
 export async function confirmFinalScript(runId: string): Promise<RunInfo> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/final-confirm`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/final-confirm`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -340,7 +373,7 @@ export async function confirmFinalScript(runId: string): Promise<RunInfo> {
 }
 
 export async function buildPlan(runId: string): Promise<RunInfo> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/build-plan`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/build-plan`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -351,7 +384,7 @@ export async function buildPlan(runId: string): Promise<RunInfo> {
 }
 
 export async function getChapterReviews(runId: string): Promise<ChapterReviewsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-reviews`);
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-reviews`);
   if (!response.ok) {
     throw new Error(await errorText(response));
   }
@@ -359,7 +392,7 @@ export async function getChapterReviews(runId: string): Promise<ChapterReviewsRe
 }
 
 export async function approveChapter(runId: string, chapterId: string): Promise<ChapterReviewsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/${chapterId}/approve`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/${chapterId}/approve`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -369,7 +402,7 @@ export async function approveChapter(runId: string, chapterId: string): Promise<
 }
 
 export async function approveAllChapters(runId: string): Promise<ChapterReviewsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/approve-all`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/approve-all`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -379,7 +412,7 @@ export async function approveAllChapters(runId: string): Promise<ChapterReviewsR
 }
 
 export async function regenerateChapter(runId: string, chapterId: string): Promise<ChapterReviewsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/${chapterId}/regenerate`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/${chapterId}/regenerate`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -392,7 +425,7 @@ export async function getChapterChatMessages(
   runId: string,
   chapterId: string,
 ): Promise<ChapterChatMessagesResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/${chapterId}/chat/messages`);
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-cards/${chapterId}/chat/messages`);
   if (!response.ok) {
     throw new Error(await errorText(response));
   }
@@ -403,7 +436,7 @@ export async function getChapterScriptChatMessages(
   runId: string,
   chapterId: string,
 ): Promise<ChapterChatMessagesResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/${chapterId}/chat/messages`);
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/chapter-script-cards/${chapterId}/chat/messages`);
   if (!response.ok) {
     throw new Error(await errorText(response));
   }
@@ -416,7 +449,7 @@ export async function createFinalFeedback(
   complaint: string,
   desiredChange: string,
 ): Promise<FinalFeedbackResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/final-feedback`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/final-feedback`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -438,7 +471,7 @@ export async function applyFinalFeedback(
   feedbackId: string,
   confirmedChapterId?: string | null,
 ): Promise<FinalFeedbackResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/final-feedback/${feedbackId}/apply`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/final-feedback/${feedbackId}/apply`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -452,7 +485,7 @@ export async function applyFinalFeedback(
 }
 
 export async function getRun(runId: string): Promise<RunInfo> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}`);
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}`);
   if (!response.ok) {
     throw new Error(await errorText(response));
   }
@@ -477,7 +510,7 @@ function delay(ms: number): Promise<void> {
 }
 
 export async function getArtifact(runId: string, name: string): Promise<string> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/artifacts/${name}`);
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/artifacts/${name}`);
   if (!response.ok) {
     throw new Error(await errorText(response));
   }
@@ -489,7 +522,7 @@ export function artifactUrl(runId: string, name: string): string {
 }
 
 export async function getScriptSchema(): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE_URL}/api/schema/script`);
+  const response = await apiFetch(`${API_BASE_URL}/api/schema/script`);
   if (!response.ok) {
     throw new Error(await errorText(response));
   }
@@ -500,7 +533,7 @@ export async function validateYaml(
   runId: string,
   yamlText: string,
 ): Promise<ValidationReport> {
-  const response = await fetch(`${API_BASE_URL}/api/runs/${runId}/validate-yaml`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/runs/${runId}/validate-yaml`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -515,7 +548,7 @@ export async function validateYaml(
 }
 
 export async function getLlmStatus(): Promise<LlmStatus> {
-  const response = await fetch(`${API_BASE_URL}/api/llm/status`);
+  const response = await apiFetch(`${API_BASE_URL}/api/llm/status`);
   if (!response.ok) {
     throw new Error(await errorText(response));
   }
@@ -523,7 +556,7 @@ export async function getLlmStatus(): Promise<LlmStatus> {
 }
 
 export async function testLlmConnection(): Promise<LlmTestResult> {
-  const response = await fetch(`${API_BASE_URL}/api/llm/test`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/llm/test`, {
     method: "POST",
   });
   if (!response.ok) {
@@ -532,11 +565,19 @@ export async function testLlmConnection(): Promise<LlmTestResult> {
   return response.json();
 }
 
+async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    throw new Error(friendlyErrorMessage(error));
+  }
+}
+
 async function errorText(response: Response): Promise<string> {
   try {
     const payload = await response.json();
-    return payload.detail ?? response.statusText;
+    return friendlyErrorMessage(payload.detail ?? response.statusText);
   } catch {
-    return response.statusText;
+    return friendlyErrorMessage(response.statusText);
   }
 }

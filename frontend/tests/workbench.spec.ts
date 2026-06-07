@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-test.setTimeout(240_000);
+test.setTimeout(360_000);
 
-const aiTimeout = 90_000;
+const aiTimeout = 120_000;
 
 const sixChapterNovel = Array.from({ length: 6 }, (_, index) => {
   const chapter = index + 1;
@@ -14,7 +14,7 @@ const sixChapterNovel = Array.from({ length: 6 }, (_, index) => {
 }).join("\n\n");
 
 test("reviews chapters before planning and keeps artifacts hidden until script generation", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/workbench");
 
   await expect(page.getByRole("heading", { name: /把小说改成/ })).toBeVisible();
   await expect(page.getByTestId("artifact-panel")).toHaveCount(0);
@@ -64,6 +64,7 @@ test("reviews chapters before planning and keeps artifacts hidden until script g
   await page.getByLabel("风格偏向").selectOption("psychological");
   await page.getByLabel("作者备注").fill("心理活动要转成可表演动作。");
   const scopeCard = page.locator(".generation-scope-card");
+  await scopeCard.getByRole("button", { name: "前 3 章" }).click();
   await expect(scopeCard.getByText("已选择第 1, 2, 3 章")).toBeVisible();
   await scopeCard.getByRole("button", { name: /第 2 章/ }).click();
   await scopeCard.getByRole("button", { name: /第 5 章/ }).click();
@@ -77,7 +78,10 @@ test("reviews chapters before planning and keeps artifacts hidden until script g
   await expect(scriptGrid.getByText("第 3 章剧本卡")).toBeVisible();
   await expect(scriptGrid.getByText("第 5 章剧本卡")).toBeVisible();
   await expect(scriptGrid.getByText("第 2 章剧本卡")).toHaveCount(0);
-  await page.getByTestId("chapter-script-review-grid").locator(".review-card").first().getByRole("button", { name: "讨论/修改剧本" }).click();
+  await expect(page.locator(".script-workbench").getByText("已生成 3/3 张剧本卡")).toBeVisible({ timeout: aiTimeout });
+  const firstScriptDiscussButton = scriptGrid.locator(".review-card").first().getByRole("button", { name: "讨论/修改剧本" });
+  await expect(firstScriptDiscussButton).toBeEnabled({ timeout: aiTimeout });
+  await firstScriptDiscussButton.click();
   await expect(page.getByTestId("chapter-chat-panel")).toBeVisible();
   await expect(page.getByTestId("chapter-chat-panel").getByText("剧本卡讨论")).toBeVisible();
   await page.getByTestId("chapter-chat-panel").getByPlaceholder(/指出你不满意的地方/).fill("这一章开场不够紧张，要带着这个意见重写。");
@@ -123,7 +127,7 @@ test("reviews chapters before planning and keeps artifacts hidden until script g
   await expect(page.getByTestId("artifact-panel")).toBeVisible();
 
   await page.getByRole("button", { name: "重新校验 YAML" }).click();
-  await expect(page.getByText("校验通过")).toBeVisible();
+  await expect(page.getByTestId("artifact-panel").getByText("校验通过")).toBeVisible();
   await page.getByTestId("artifact-panel").getByRole("button", { name: "YAML" }).click();
   const confirmResponsePromise = page.waitForResponse((response) => (
     response.url().includes("/final-confirm")
