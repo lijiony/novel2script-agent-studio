@@ -1,8 +1,6 @@
 # Novel2Script Agent Studio
 
-> Demo video: TODO - add the narrated public demo link here before final submission.
-
-XEngineer third-batch topic: **AI novel-to-script tool**.
+> Demo video: coming soon.
 
 Novel2Script Agent Studio is a lightweight, stateless AI co-writer workbench that helps authors adapt 3+ chapters of novel text into a performable, editable, and traceable screenplay YAML draft. It first analyzes the novel and proposes an adaptation plan, then lets the author choose script format, style focus, adaptation scale, preserved content, forbidden changes, and notes before generation.
 
@@ -139,30 +137,6 @@ npx playwright install chromium
 npx playwright test
 ```
 
-Submission readiness precheck:
-
-```powershell
-.\scripts\check-submission-ready.ps1 -AllowMissingDemo
-```
-
-When checking an open PR branch before merge:
-
-```powershell
-.\scripts\check-submission-ready.ps1 -AllowMissingDemo -AllowNonMain
-```
-
-After uploading the narrated video, update the placeholders with:
-
-```powershell
-.\scripts\set-demo-link.ps1 -DemoUrl "<your video URL>"
-```
-
-Before final submission, run the strict version:
-
-```powershell
-.\scripts\check-submission-ready.ps1
-```
-
 ## Environment
 
 Backend environment variables:
@@ -251,18 +225,9 @@ Third-party libraries are listed in `backend/pyproject.toml` and `frontend/packa
 - Mock mode generates deterministic sample-like output for reliable presentation.
 - Real LLM quality depends on the configured model and API availability.
 
-## Submission Notes
+## Project Notes
 
-- Repository must be created after `2026-06-05 00:00` China time.
-- All commits must be inside the third-batch work window.
-- Keep small PRs with clear title, feature description, implementation approach, and test method.
-- Add the narrated demo link at the top of this README before final submission.
-
-See also:
-
-- `docs/schema.md`
-- `docs/demo_script.md`
-- `docs/final_demo_rehearsal.md`
-- `docs/submission_summary.md`
-- `docs/pr_plan.md`
-- `docs/submission_checklist.md`
+- The app is intentionally stateless/light-state: run artifacts are stored under `runs/{run_id}` and are ignored by git.
+- Mock mode is available for stable demos and local review without external model latency.
+- Real model mode uses the configured OpenAI-compatible provider and never requires storing API keys in the repository.
+- The screenplay schema design is documented in `docs/schema.md`.
