@@ -2,6 +2,10 @@
 
 > Demo video: coming soon.
 
+Language: English | [简体中文](README.zh-CN.md)
+
+Schema: [YAML Schema Design](docs/schema.md)
+
 Novel2Script Agent Studio is a lightweight, stateless AI co-writer workbench that helps authors adapt 3+ chapters of novel text into a performable, editable, and traceable screenplay YAML draft. It first analyzes the novel and proposes an adaptation plan, then lets the author choose script format, style focus, adaptation scale, preserved content, forbidden changes, and notes before generation.
 
 The backend runs fixed LangGraph workflows, validates structured JSON with Pydantic and JSON Schema, exports YAML with `ruamel.yaml`, and returns planning and validation reports for editing and download.
@@ -159,7 +163,7 @@ The schema is defined in Pydantic v2 models under `backend/app/domain/schemas.py
 GET /api/schema/script
 ```
 
-The human-readable schema document lives at `docs/schema.md` and is also written into each run directory as `schema.md`.
+The human-readable schema design document lives at [docs/schema.md](docs/schema.md) and is also written into each run directory as `schema.md`.
 
 ## Sample Output
 
@@ -230,4 +234,4 @@ Third-party libraries are listed in `backend/pyproject.toml` and `frontend/packa
 - The app is intentionally stateless/light-state: run artifacts are stored under `runs/{run_id}` and are ignored by git.
 - Mock mode is available for stable demos and local review without external model latency.
 - Real model mode uses the configured OpenAI-compatible provider and never requires storing API keys in the repository.
-- The screenplay schema design is documented in `docs/schema.md`.
+- The screenplay schema design is documented in [docs/schema.md](docs/schema.md).
