@@ -23,8 +23,10 @@ import {
   approveChapterScript,
   artifactUrl,
   buildPlan,
+  checkBackendHealth,
   confirmFinalScript,
   continuityMerge,
+  friendlyErrorMessage,
   generateRun,
   getArtifact,
   getChapterChatMessages,
@@ -46,6 +48,31 @@ type ArtifactPanel = "chapterCards" | "chapterScripts" | "storyBible" | "yaml" |
 type ConversationPhase = "idle" | "analyzing" | "reviewing" | "planned" | "generating" | "completed" | "failed";
 type ReviewFilter = "all" | "pending" | "attention";
 type ChatMode = "chapter" | "script";
+type ActionId =
+  | "loadTask"
+  | "intake"
+  | "approveChapter"
+  | "approveAllChapters"
+  | "regenerateChapter"
+  | "buildPlan"
+  | "chapterChat"
+  | "generateScripts"
+  | "approveScript"
+  | "approveAllScripts"
+  | "regenerateScript"
+  | "continuityMerge"
+  | "validateYaml"
+  | "finalFeedback"
+  | "applyFinalFeedback"
+  | "confirmFinal"
+  | "testLlm";
+type ToastKind = "success" | "error" | "info";
+type ToastItem = {
+  id: number;
+  kind: ToastKind;
+  title: string;
+  detail?: string;
+};
 
 type StoryBible = {
   main_plot: string;
@@ -159,6 +186,26 @@ const stepLabels = [
   "YAML 打磨",
 ];
 
+const actionLabels: Record<ActionId, string> = {
+  loadTask: "正在打开改编任务...",
+  intake: "正在分析章节、人物和线索...",
+  approveChapter: "正在通过章节理解卡...",
+  approveAllChapters: "正在批量通过章节理解卡...",
+  regenerateChapter: "正在带着讨论重新理解本章...",
+  buildPlan: "正在生成 Story Bible 和改编计划...",
+  chapterChat: "正在和 AI 讨论这一章...",
+  generateScripts: "正在生成每章剧本卡...",
+  approveScript: "正在通过章节剧本卡...",
+  approveAllScripts: "正在批量通过章节剧本卡...",
+  regenerateScript: "正在重写本章剧本卡...",
+  continuityMerge: "正在做连贯性合成并导出 YAML...",
+  validateYaml: "正在校验 YAML...",
+  finalFeedback: "正在让 AI 诊断返修意见...",
+  applyFinalFeedback: "正在执行返修并重新合成...",
+  confirmFinal: "正在确认最终剧本...",
+  testLlm: "正在测试模型连接...",
+};
+
 export default function Home() {
   const [inputText, setInputText] = useState(sampleText);
   const [file, setFile] = useState<File | null>(null);
@@ -206,6 +253,10 @@ export default function Home() {
   const [activeArtifactPanel, setActiveArtifactPanel] = useState<ArtifactPanel | null>(null);
   const [generationRequested, setGenerationRequested] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [activeAction, setActiveAction] = useState<ActionId | null>(null);
+  const [activeActionTarget, setActiveActionTarget] = useState<string | null>(null);
+  const [backendReachable, setBackendReachable] = useState<boolean | null>(null);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const allChaptersApproved = chapterReviews.length > 0
@@ -215,6 +266,7 @@ export default function Home() {
   const canReviewChapters = Boolean(run?.run_id && run.status === "awaiting_chapter_review");
   const canReviewScripts = Boolean(run?.run_id && run.status === "awaiting_script_review");
   const canBuildPlan = Boolean(run?.run_id && run.status === "awaiting_chapter_review" && allChaptersApproved);
+  const canOpenGenerate = Boolean(run?.run_id && run.status === "planned");
   const canGenerate = Boolean(run?.run_id && run.status === "planned" && controls.generation_scope.length);
   const canContinuityMerge = Boolean(run?.run_id && run.status === "awaiting_script_review" && allScriptsApproved);
   const canValidate = Boolean(run?.run_id && yamlText.trim());
@@ -238,6 +290,7 @@ export default function Home() {
   const contextPanelOpen = Boolean(chatChapterId || activeArtifactPanel);
 
   useEffect(() => {
+    refreshBackendHealth();
     getScriptSchema()
       .then(setSchema)
       .catch(() => setSchema(null));
@@ -283,7 +336,7 @@ export default function Home() {
           setFinalFeedbackApplying(false);
         }
       } catch (nextError) {
-        setError(nextError instanceof Error ? nextError.message : String(nextError));
+        reportError(nextError);
       }
     }, 1200);
     return () => window.clearInterval(timer);
@@ -352,6 +405,52 @@ export default function Home() {
     ].filter((group) => group.items.length > 0);
   }, [run]);
 
+  function isAction(action: ActionId, target?: string | null): boolean {
+    return activeAction === action && (target === undefined || activeActionTarget === target);
+  }
+
+  function pushToast(kind: ToastKind, title: string, detail?: string) {
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    setToasts((current) => [...current.slice(-3), { id, kind, title, detail }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    }, kind === "error" ? 5200 : 3200);
+  }
+
+  function beginAction(action: ActionId, target?: string | null) {
+    setActiveAction(action);
+    setActiveActionTarget(target ?? null);
+    setBusy(true);
+    setError(null);
+  }
+
+  function finishAction() {
+    setBusy(false);
+    setActiveAction(null);
+    setActiveActionTarget(null);
+  }
+
+  function reportError(nextError: unknown) {
+    const message = friendlyErrorMessage(nextError);
+    setError(message);
+    pushToast("error", "操作没有完成", message);
+  }
+
+  function reportSuccess(title: string, detail?: string) {
+    pushToast("success", title, detail);
+  }
+
+  async function refreshBackendHealth(showNotice = false): Promise<boolean> {
+    const reachable = await checkBackendHealth();
+    setBackendReachable(reachable);
+    if (!reachable && showNotice) {
+      const message = `后端服务暂时连不上。请确认 ${API_BASE_URL} 已启动，然后重试。`;
+      setError(message);
+      pushToast("error", "后端服务未连接", message);
+    }
+    return reachable;
+  }
+
   function clearRunState() {
     setRun(null);
     setPlanMarkdown("");
@@ -389,6 +488,8 @@ export default function Home() {
     setActiveArtifactPanel(null);
     setGenerationRequested(false);
     setError(null);
+    setActiveAction(null);
+    setActiveActionTarget(null);
     setControls((current) => ({ ...current, generation_scope: [] }));
   }
 
@@ -413,8 +514,7 @@ export default function Home() {
   }
 
   async function loadRunTask(runId: string) {
-    setBusy(true);
-    setError(null);
+    beginAction("loadTask", runId);
     setActiveArtifactPanel(null);
     setChatChapterId(null);
     setChatMessages([]);
@@ -464,16 +564,18 @@ export default function Home() {
         await loadFinalArtifacts(nextRun.run_id);
       }
       await refreshTasks();
+      reportSuccess("任务已打开", runId);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
   function handleNewRun() {
     clearRunState();
     setFile(null);
+    pushToast("info", "已新建改编", "可以粘贴小说或上传 .txt 开始。");
   }
 
   function openArtifactPanel(panel: ArtifactPanel) {
@@ -489,35 +591,37 @@ export default function Home() {
   }
 
   async function handleIntake() {
-    setBusy(true);
-    setError(null);
-    setPlanMarkdown("");
-    setAdaptationPlan(null);
-    setChapterCards([]);
-    setChapterReviews([]);
-    setChapterScriptReviews([]);
-    setOpenChapterId(null);
-    setOpenScriptChapterId(null);
-    setChatChapterId(null);
-    setChatMode("chapter");
-    setChatMessages([]);
-    setAssistantDraft("");
-    setVisibleThinking("");
-    setToolEvents([]);
-    setTypedSummaries({});
-    setStoryBible(null);
-    setStoryBibleMarkdown("");
-    setYamlText("");
-    setReportMarkdown("");
-    setValidationReport(null);
-    setFinalFeedbackOpen(false);
-    setFinalFeedbackText("");
-    setFinalFeedbackDesired("");
-    setFinalFeedbackResult(null);
-    setActiveArtifactPanel(null);
-    setGenerationRequested(false);
-    setControls((current) => ({ ...current, generation_scope: [] }));
+    beginAction("intake");
     try {
+      if (!(await refreshBackendHealth(true))) {
+        return;
+      }
+      setPlanMarkdown("");
+      setAdaptationPlan(null);
+      setChapterCards([]);
+      setChapterReviews([]);
+      setChapterScriptReviews([]);
+      setOpenChapterId(null);
+      setOpenScriptChapterId(null);
+      setChatChapterId(null);
+      setChatMode("chapter");
+      setChatMessages([]);
+      setAssistantDraft("");
+      setVisibleThinking("");
+      setToolEvents([]);
+      setTypedSummaries({});
+      setStoryBible(null);
+      setStoryBibleMarkdown("");
+      setYamlText("");
+      setReportMarkdown("");
+      setValidationReport(null);
+      setFinalFeedbackOpen(false);
+      setFinalFeedbackText("");
+      setFinalFeedbackDesired("");
+      setFinalFeedbackResult(null);
+      setActiveArtifactPanel(null);
+      setGenerationRequested(false);
+      setControls((current) => ({ ...current, generation_scope: [] }));
       const nextRun = await intakeRun(inputText, file);
       setRun(nextRun);
       await refreshTasks();
@@ -528,10 +632,11 @@ export default function Home() {
       ) {
         await loadChapterReviewState(nextRun.run_id);
       }
+      reportSuccess("章节理解已生成", "可以开始逐章确认 AI 是否读懂。");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -539,16 +644,16 @@ export default function Home() {
     if (!run || busy) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("approveChapter", chapterId);
     try {
       const response = await approveChapter(run.run_id, chapterId);
       setChapterReviews(response.items);
       await refreshTasks();
+      reportSuccess("章节理解已通过", chapterId);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -556,16 +661,16 @@ export default function Home() {
     if (!run) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("approveAllChapters");
     try {
       const response = await approveAllChapters(run.run_id);
       setChapterReviews(response.items);
       await refreshTasks();
+      reportSuccess("所有章节理解已通过", "可以生成 Story Bible 和改编计划。");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -573,8 +678,7 @@ export default function Home() {
     if (!run || busy) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("regenerateChapter", chapterId);
     setRun({ ...run, status: "regenerating_chapter", current_stage: "regenerate_chapter" });
     setChapterReviews((current) => current.map((item) => (
       item.review.chapter_id === chapterId
@@ -610,10 +714,11 @@ export default function Home() {
       setChapterReviews(response.items);
       setRun({ ...run, status: "regenerating_chapter", current_stage: "regenerate_chapter" });
       await refreshTasks();
+      reportSuccess("本章已重新理解", chapterId);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -621,8 +726,7 @@ export default function Home() {
     if (!run) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("buildPlan");
     setActiveArtifactPanel(null);
     try {
       const nextRun = await buildPlan(run.run_id);
@@ -631,10 +735,11 @@ export default function Home() {
       if (nextRun.status === "planned" || nextRun.artifacts.includes("adaptation_plan.json")) {
         await loadPlanningArtifacts(nextRun.run_id);
       }
+      reportSuccess("改编计划已生成", "可以确认剧本类型、风格和生成范围。");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -660,7 +765,7 @@ export default function Home() {
   }
 
   async function handleOpenScriptChat(chapterId: string) {
-    if (!run) {
+    if (!run || !canReviewScripts) {
       return;
     }
     setChatChapterId(chapterId);
@@ -687,7 +792,7 @@ export default function Home() {
     const message = chatInput.trim();
     setChatInput("");
     setChatMessages((current) => [...current, { role: "user", content: message }]);
-    setBusy(true);
+    beginAction("chapterChat", chatChapterId);
     setAssistantDraft("");
     setVisibleThinking("");
     setToolEvents([]);
@@ -695,11 +800,16 @@ export default function Home() {
       const chatPath = chatMode === "script"
         ? "chapter-script-cards"
         : "chapter-cards";
-      const response = await fetch(`${API_BASE_URL}/api/runs/${run.run_id}/${chatPath}/${chatChapterId}/chat/stream`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE_URL}/api/runs/${run.run_id}/${chatPath}/${chatChapterId}/chat/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
+      } catch (streamError) {
+        throw new Error(friendlyErrorMessage(streamError));
+      }
       if (!response.ok || !response.body) {
         throw new Error(response.ok ? "Streaming response is empty." : await response.text());
       }
@@ -755,13 +865,14 @@ export default function Home() {
         setVisibleThinking("");
         setToolEvents([]);
       }
+      reportSuccess(chatMode === "script" ? "剧本卡讨论已收到" : "章节讨论已收到", "可以带着这段讨论重写或重新理解。");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
       setAssistantDraft("");
       setVisibleThinking("");
       setToolEvents([]);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -770,11 +881,12 @@ export default function Home() {
       return;
     }
     if (!controls.generation_scope.length) {
-      setError("请先选择要生成剧本卡的章节。");
+      const message = "请先选择要生成剧本卡的章节。";
+      setError(message);
+      pushToast("error", "还不能生成剧本卡", message);
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("generateScripts");
     setYamlText("");
     setReportMarkdown("");
     setValidationReport(null);
@@ -793,11 +905,12 @@ export default function Home() {
         await loadChapterScriptReviewState(nextRun.run_id);
         setGenerationRequested(false);
       }
+      reportSuccess("章节剧本卡已生成", "可以逐章查看、讨论、通过或重写。");
     } catch (nextError) {
       setGenerationRequested(false);
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -805,17 +918,17 @@ export default function Home() {
     if (!run || busy) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("approveScript", chapterId);
     try {
       const response = await approveChapterScript(run.run_id, chapterId);
       setChapterScriptReviews(response.items);
       setRun(await getRun(run.run_id));
       await refreshTasks();
+      reportSuccess("章节剧本卡已通过", chapterId);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -823,26 +936,25 @@ export default function Home() {
     if (!run) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("approveAllScripts");
     try {
       const response = await approveAllChapterScripts(run.run_id);
       setChapterScriptReviews(response.items);
       setRun(await getRun(run.run_id));
       await refreshTasks();
+      reportSuccess("所有剧本卡已通过", "可以合成 YAML 初稿。");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
   async function handleRegenerateChapterScript(chapterId: string) {
-    if (!run || busy) {
+    if (!run || busy || !canReviewScripts) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("regenerateScript", chapterId);
     setRun({ ...run, status: "regenerating_chapter_script", current_stage: "regenerate_chapter_script" });
     setChapterScriptReviews((current) => markScriptReviewRegenerating(current, chapterId));
     try {
@@ -860,10 +972,11 @@ export default function Home() {
       const response = await regenerateChapterScript(run.run_id, chapterId);
       setChapterScriptReviews(response.items);
       await refreshTasks();
+      reportSuccess("本章剧本卡已重写", chapterId);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -871,8 +984,7 @@ export default function Home() {
     if (!run) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("continuityMerge");
     setActiveArtifactPanel(null);
     setGenerationRequested(true);
     try {
@@ -889,11 +1001,12 @@ export default function Home() {
         setActiveArtifactPanel("yaml");
         setGenerationRequested(false);
       }
+      reportSuccess("YAML 已导出", "可以校验、下载或继续返修。");
     } catch (nextError) {
       setGenerationRequested(false);
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -901,16 +1014,20 @@ export default function Home() {
     if (!run || busy) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("validateYaml");
     try {
       const report = await validateYaml(run.run_id, yamlText);
       setValidationReport(report);
       setActiveArtifactPanel("report");
+      if (report.valid) {
+        reportSuccess("YAML 校验通过", report.summary);
+      } else {
+        pushToast("error", "YAML 需要调整", report.summary);
+      }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -920,8 +1037,7 @@ export default function Home() {
     }
     const complaint = finalFeedbackText.trim();
     const desiredChange = finalFeedbackDesired.trim();
-    setBusy(true);
-    setError(null);
+    beginAction("finalFeedback");
     setFinalFeedbackDraft("");
     setFinalFeedbackThinking("");
     setFinalFeedbackResult(null);
@@ -935,15 +1051,20 @@ export default function Home() {
       },
     ]);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/runs/${run.run_id}/final-feedback/chat/stream`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          category: finalFeedbackCategory,
-          complaint,
-          desired_change: desiredChange,
-        }),
-      });
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE_URL}/api/runs/${run.run_id}/final-feedback/chat/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            category: finalFeedbackCategory,
+            complaint,
+            desired_change: desiredChange,
+          }),
+        });
+      } catch (streamError) {
+        throw new Error(friendlyErrorMessage(streamError));
+      }
       if (!response.ok || !response.body) {
         throw new Error(response.ok ? "Streaming response is empty." : await response.text());
       }
@@ -1021,12 +1142,13 @@ export default function Home() {
       } else if (feedbackResponse?.suggested_chapter_id) {
         await applyFinalFeedbackResponse(feedbackResponse, feedbackResponse.suggested_chapter_id);
       }
+      reportSuccess("返修诊断已完成", "AI 已判断问题类型，并开始执行可自动处理的返修。");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
       setFinalFeedbackDraft("");
       setFinalFeedbackThinking("");
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -1036,19 +1158,22 @@ export default function Home() {
     }
     const feedbackToApply = finalFeedbackResult;
     if (feedbackToApply.feedback.target_type !== "continuity" && !finalFeedbackChapterId) {
-      setError("请先确认要重写的章节，再执行返修。");
+      const message = "请先确认要重写的章节，再执行返修。";
+      setError(message);
+      pushToast("error", "还不能返修", message);
       return;
     }
-    setBusy(true);
+    beginAction("applyFinalFeedback", finalFeedbackChapterId);
     try {
       await applyFinalFeedbackResponse(
         feedbackToApply,
         feedbackToApply.feedback.target_type === "continuity" ? null : finalFeedbackChapterId,
       );
+      reportSuccess("返修已完成", "YAML 已根据反馈重新合成。");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -1100,17 +1225,17 @@ export default function Home() {
     if (!run || busy) {
       return;
     }
-    setBusy(true);
-    setError(null);
+    beginAction("confirmFinal");
     try {
       const nextRun = await confirmFinalScript(run.run_id);
       setRun(nextRun);
       setFinalFeedbackOpen(false);
       await refreshTasks();
+      reportSuccess("剧本已确认", "这次改编任务已完成。");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -1122,6 +1247,7 @@ export default function Home() {
     anchor.download = "script.edited.yaml";
     anchor.click();
     window.URL.revokeObjectURL(url);
+    reportSuccess("YAML 已开始下载", "下载的是当前编辑器里的内容。");
   }
 
   function handleFile(event: ChangeEvent<HTMLInputElement>) {
@@ -1196,17 +1322,34 @@ export default function Home() {
     }
   }
 
+  async function handleRefreshLlmStatus() {
+    beginAction("testLlm", "refresh");
+    try {
+      await refreshBackendHealth(true);
+      await refreshLlmStatus();
+      reportSuccess("模型状态已刷新");
+    } catch (nextError) {
+      reportError(nextError);
+    } finally {
+      finishAction();
+    }
+  }
+
   async function handleTestLlm() {
-    setBusy(true);
-    setError(null);
+    beginAction("testLlm", "test");
     try {
       const result = await testLlmConnection();
       setLlmTestResult(result);
       setLlmStatus(result);
+      if (result.success) {
+        reportSuccess("模型连接可用", result.message);
+      } else {
+        pushToast("error", "模型连接不可用", result.message);
+      }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      reportError(nextError);
     } finally {
-      setBusy(false);
+      finishAction();
     }
   }
 
@@ -1231,6 +1374,9 @@ export default function Home() {
           新建改编
         </button>
         <div className="run-pill">{phaseLabel(phase)}</div>
+        <div className={`service-pill ${backendReachable === false ? "offline" : backendReachable ? "online" : ""}`}>
+          {backendReachable === null ? "服务检测中" : backendReachable ? "后端已连接" : "后端未连接"}
+        </div>
         <button className="settings-button" type="button" onClick={() => setSettingsOpen(true)}>
           模型设置
         </button>
@@ -1279,8 +1425,10 @@ export default function Home() {
           llmStatus={llmStatus}
           llmTestResult={llmTestResult}
           onClose={() => setSettingsOpen(false)}
-          onRefresh={refreshLlmStatus}
+          onRefresh={handleRefreshLlmStatus}
           onTest={handleTestLlm}
+          refreshing={isAction("testLlm", "refresh")}
+          testing={isAction("testLlm", "test")}
         />
       ) : null}
 
@@ -1307,6 +1455,12 @@ export default function Home() {
             totalScriptScenes={totalScriptScenes}
             yamlReady={Boolean(yamlText)}
           />
+          {activeAction ? (
+            <ActionBanner
+              action={actionLabels[activeAction]}
+              target={activeActionTarget}
+            />
+          ) : null}
         </section>
 
         <section className="message-list" aria-label="副编剧对话流">
@@ -1336,8 +1490,10 @@ export default function Home() {
               <button type="button" onClick={() => setInputText(sampleText)}>
                 加载示例
               </button>
-              <button type="button" disabled={busy || isPolling} onClick={handleIntake}>
-                开始分析
+              <button className={isAction("intake") ? "is-loading" : ""} type="button" disabled={busy || isPolling} onClick={handleIntake}>
+                <ActionLabel loading={isAction("intake")} loadingText="正在分析章节...">
+                  开始分析
+                </ActionLabel>
               </button>
             </div>
             {file ? <p className="hint">已选择文件：{file.name}</p> : null}
@@ -1369,6 +1525,8 @@ export default function Home() {
                 openChapterId={openChapterId}
                 setOpenChapterId={setOpenChapterId}
                 typedSummaries={typedSummaries}
+                activeAction={activeAction}
+                activeActionTarget={activeActionTarget}
               />
             </AssistantMessage>
           ) : null}
@@ -1420,8 +1578,10 @@ export default function Home() {
                 >
                   减少 AI 新增
                 </button>
-                <button type="button" disabled={!canGenerate || busy || isPolling} onClick={handleGenerate}>
-                  {generationRequested || run?.status === "generating_chapter_scripts" ? "正在生成剧本卡..." : "生成每章剧本卡"}
+                <button className={isAction("generateScripts") ? "is-loading" : ""} type="button" disabled={!canOpenGenerate || busy || isPolling} onClick={handleGenerate}>
+                  <ActionLabel loading={isAction("generateScripts") || generationRequested || run?.status === "generating_chapter_scripts"} loadingText="正在生成剧本卡...">
+                    生成每章剧本卡
+                  </ActionLabel>
                 </button>
               </div>
             </UserMessage>
@@ -1446,6 +1606,8 @@ export default function Home() {
                 onToggleExpanded={() => setScriptReviewsExpanded((current) => !current)}
                 openChapterId={openScriptChapterId}
                 setOpenChapterId={setOpenScriptChapterId}
+                activeAction={activeAction}
+                activeActionTarget={activeActionTarget}
               />
             </AssistantMessage>
           ) : null}
@@ -1501,6 +1663,7 @@ export default function Home() {
           onChangeInput={setChatInput}
           onClose={() => setChatChapterId(null)}
           onRegenerate={chatMode === "script" ? handleRegenerateChapterScript : handleRegenerateChapter}
+          canRegenerate={chatMode === "script" ? canReviewScripts : canReviewChapters}
           regenerating={Boolean(
             chatMode === "script"
               ? activeScriptChatChapter?.review.status === "regenerating"
@@ -1509,6 +1672,8 @@ export default function Home() {
           onSend={handleSendChapterChat}
           toolEvents={toolEvents}
           visibleThinking={visibleThinking}
+          activeAction={activeAction}
+          activeActionTarget={activeActionTarget}
         />
       ) : activeArtifactPanel ? (
         <ArtifactPanelView
@@ -1556,8 +1721,67 @@ export default function Home() {
           storyBibleMarkdown={storyBibleMarkdown}
           validationReport={validationReport}
           yamlText={yamlText}
+          activeAction={activeAction}
+          activeActionTarget={activeActionTarget}
         />
       ) : null}
+      <ToastViewport toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))} />
+    </div>
+  );
+}
+
+function ActionBanner({ action, target }: { action: string; target: string | null }) {
+  return (
+    <div className="action-banner" data-testid="action-banner" role="status" aria-live="polite">
+      <span className="mini-spinner" aria-hidden="true" />
+      <div>
+        <strong>{action}</strong>
+        {target ? <small>当前目标：{target}</small> : <small>请稍等，完成后会自动更新页面。</small>}
+      </div>
+    </div>
+  );
+}
+
+function ActionLabel({
+  children,
+  loading,
+  loadingText,
+}: {
+  children: ReactNode;
+  loading: boolean;
+  loadingText: string;
+}) {
+  return (
+    <span className="action-label">
+      {loading ? <span className="mini-spinner" aria-hidden="true" /> : null}
+      <span>{loading ? loadingText : children}</span>
+    </span>
+  );
+}
+
+function ToastViewport({
+  onDismiss,
+  toasts,
+}: {
+  onDismiss: (id: number) => void;
+  toasts: ToastItem[];
+}) {
+  if (!toasts.length) {
+    return null;
+  }
+  return (
+    <div className="toast-viewport" data-testid="toast-viewport" aria-live="polite">
+      {toasts.map((toast) => (
+        <div className={`toast toast-${toast.kind}`} key={toast.id}>
+          <div>
+            <strong>{toast.title}</strong>
+            {toast.detail ? <p>{toast.detail}</p> : null}
+          </div>
+          <button type="button" aria-label="关闭提示" onClick={() => onDismiss(toast.id)}>
+            关闭
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1673,6 +1897,8 @@ function TaskList({
 }
 
 function ChapterReviewWorkbench({
+  activeAction,
+  activeActionTarget,
   allApproved,
   busy,
   canBuildPlan,
@@ -1691,6 +1917,8 @@ function ChapterReviewWorkbench({
   setOpenChapterId,
   typedSummaries,
 }: {
+  activeAction: ActionId | null;
+  activeActionTarget: string | null;
   allApproved: boolean;
   busy: boolean;
   canBuildPlan: boolean;
@@ -1733,11 +1961,15 @@ function ChapterReviewWorkbench({
         </div>
       </div>
       <div className="review-actions">
-        <button type="button" disabled={!canReview || !items.length || busy} onClick={onApproveAll}>
-          全部通过
+        <button className={activeAction === "approveAllChapters" ? "is-loading" : ""} type="button" disabled={!canReview || !items.length || busy} onClick={onApproveAll}>
+          <ActionLabel loading={activeAction === "approveAllChapters"} loadingText="正在通过...">
+            全部通过
+          </ActionLabel>
         </button>
-        <button type="button" disabled={!canBuildPlan || busy} onClick={onBuildPlan}>
-          生成 Story Bible 和改编计划
+        <button className={activeAction === "buildPlan" ? "is-loading" : ""} type="button" disabled={!canBuildPlan || busy} onClick={onBuildPlan}>
+          <ActionLabel loading={activeAction === "buildPlan"} loadingText="正在生成计划...">
+            生成 Story Bible 和改编计划
+          </ActionLabel>
         </button>
         <button type="button" disabled={filtered.length <= 5} onClick={onToggleExpanded}>
           {expanded ? "收起章节" : "展开全部"}
@@ -1756,6 +1988,8 @@ function ChapterReviewWorkbench({
             setOpen={(nextOpen) => setOpenChapterId(nextOpen ? item.review.chapter_id : null)}
             typedSummary={typedSummaries[item.review.chapter_id]}
             canReview={canReview}
+            activeAction={activeAction}
+            activeActionTarget={activeActionTarget}
           />
         ))}
       </div>
@@ -1769,6 +2003,8 @@ function ChapterReviewWorkbench({
 }
 
 function ChapterReviewCard({
+  activeAction,
+  activeActionTarget,
   busy,
   canReview,
   item,
@@ -1779,6 +2015,8 @@ function ChapterReviewCard({
   setOpen,
   typedSummary,
 }: {
+  activeAction: ActionId | null;
+  activeActionTarget: string | null;
   busy: boolean;
   canReview: boolean;
   item: ChapterReviewItem;
@@ -1794,6 +2032,8 @@ function ChapterReviewCard({
   const cardLocked = item.review.status === "pending"
     || item.review.status === "reading"
     || item.review.status === "regenerating";
+  const approving = activeAction === "approveChapter" && activeActionTarget === chapterId;
+  const regenerating = activeAction === "regenerateChapter" && activeActionTarget === chapterId;
   return (
     <article className={`review-card ${reviewStatusClass(item.review.status)}`}>
       <div className="review-card-head">
@@ -1831,11 +2071,15 @@ function ChapterReviewCard({
         <button type="button" disabled={!canReview || !card || cardLocked} onClick={() => onDiscuss(chapterId)}>
           讨论/修改理解
         </button>
-        <button type="button" disabled={!canReview || busy || !card || cardLocked || item.review.status === "approved"} onClick={() => onApprove(chapterId)}>
-          通过
+        <button className={approving ? "is-loading" : ""} type="button" disabled={!canReview || busy || !card || cardLocked || item.review.status === "approved"} onClick={() => onApprove(chapterId)}>
+          <ActionLabel loading={approving} loadingText="通过中...">
+            通过
+          </ActionLabel>
         </button>
-        <button type="button" disabled={!canReview || busy || !card || cardLocked} onClick={() => onRegenerate(chapterId)}>
-          重新理解
+        <button className={regenerating ? "is-loading" : ""} type="button" disabled={!canReview || busy || !card || cardLocked} onClick={() => onRegenerate(chapterId)}>
+          <ActionLabel loading={regenerating || item.review.status === "regenerating"} loadingText="重读中...">
+            重新理解
+          </ActionLabel>
         </button>
       </div>
     </article>
@@ -1843,6 +2087,8 @@ function ChapterReviewCard({
 }
 
 function ChapterScriptReviewWorkbench({
+  activeAction,
+  activeActionTarget,
   allApproved,
   busy,
   canApprove,
@@ -1860,6 +2106,8 @@ function ChapterScriptReviewWorkbench({
   openChapterId,
   setOpenChapterId,
 }: {
+  activeAction: ActionId | null;
+  activeActionTarget: string | null;
   allApproved: boolean;
   busy: boolean;
   canApprove: boolean;
@@ -1901,11 +2149,15 @@ function ChapterScriptReviewWorkbench({
         </div>
       </div>
       <div className="review-actions">
-        <button type="button" disabled={!canApprove || !items.length || busy} onClick={onApproveAll}>
-          全部通过
+        <button className={activeAction === "approveAllScripts" ? "is-loading" : ""} type="button" disabled={!canApprove || !items.length || busy} onClick={onApproveAll}>
+          <ActionLabel loading={activeAction === "approveAllScripts"} loadingText="正在通过...">
+            全部通过
+          </ActionLabel>
         </button>
-        <button type="button" disabled={!canMerge || busy} onClick={onMerge}>
-          连贯性合成并导出 YAML
+        <button className={activeAction === "continuityMerge" ? "is-loading" : ""} type="button" disabled={!canMerge || busy} onClick={onMerge}>
+          <ActionLabel loading={activeAction === "continuityMerge"} loadingText="正在合成 YAML...">
+            连贯性合成并导出 YAML
+          </ActionLabel>
         </button>
         <button type="button" disabled={filtered.length <= 5} onClick={onToggleExpanded}>
           {expanded ? "收起剧本卡" : "展开全部"}
@@ -1923,6 +2175,8 @@ function ChapterScriptReviewWorkbench({
             onRegenerate={onRegenerate}
             open={openChapterId === item.review.chapter_id}
             setOpen={(nextOpen) => setOpenChapterId(nextOpen ? item.review.chapter_id : null)}
+            activeAction={activeAction}
+            activeActionTarget={activeActionTarget}
           />
         ))}
       </div>
@@ -1936,6 +2190,8 @@ function ChapterScriptReviewWorkbench({
 }
 
 function ChapterScriptReviewCard({
+  activeAction,
+  activeActionTarget,
   busy,
   canApprove,
   item,
@@ -1945,6 +2201,8 @@ function ChapterScriptReviewCard({
   open,
   setOpen,
 }: {
+  activeAction: ActionId | null;
+  activeActionTarget: string | null;
   busy: boolean;
   canApprove: boolean;
   item: ChapterScriptReviewItem;
@@ -1962,6 +2220,8 @@ function ChapterScriptReviewCard({
   const statusLabel = item.review.status === "ready" && item.review.revision_count > 0
     ? "已重写，待确认"
     : scriptReviewStatusLabel(item.review.status);
+  const approving = activeAction === "approveScript" && activeActionTarget === chapterId;
+  const regenerating = activeAction === "regenerateScript" && activeActionTarget === chapterId;
   return (
     <article className={`review-card script-card ${scriptReviewStatusClass(item.review.status)}`}>
       <div className="review-card-head">
@@ -2010,14 +2270,18 @@ function ChapterScriptReviewCard({
         <button type="button" disabled={!card} onClick={() => setOpen(!open)}>
           {open ? "收起详情" : "查看剧本卡"}
         </button>
-        <button type="button" disabled={!card || cardLocked} onClick={() => onDiscuss(chapterId)}>
+        <button type="button" disabled={!canApprove || !card || cardLocked} onClick={() => onDiscuss(chapterId)}>
           讨论/修改剧本
         </button>
-        <button type="button" disabled={!canApprove || busy || !card || cardLocked || item.review.status === "approved"} onClick={() => onApprove(chapterId)}>
-          通过
+        <button className={approving ? "is-loading" : ""} type="button" disabled={!canApprove || busy || !card || cardLocked || item.review.status === "approved"} onClick={() => onApprove(chapterId)}>
+          <ActionLabel loading={approving} loadingText="通过中...">
+            通过
+          </ActionLabel>
         </button>
-        <button type="button" disabled={!canApprove || busy || !card || cardLocked} onClick={() => onRegenerate(chapterId)}>
-          {item.review.status === "regenerating" ? "重写中..." : "重写本章"}
+        <button className={regenerating ? "is-loading" : ""} type="button" disabled={!canApprove || busy || !card || cardLocked} onClick={() => onRegenerate(chapterId)}>
+          <ActionLabel loading={regenerating || item.review.status === "regenerating"} loadingText="重写中...">
+            重写本章
+          </ActionLabel>
         </button>
       </div>
     </article>
@@ -2025,8 +2289,11 @@ function ChapterScriptReviewCard({
 }
 
 function ChapterChatPanel({
+  activeAction,
+  activeActionTarget,
   assistantDraft,
   busy,
+  canRegenerate,
   chapterId,
   mode,
   regenerating,
@@ -2042,8 +2309,11 @@ function ChapterChatPanel({
   toolEvents,
   visibleThinking,
 }: {
+  activeAction: ActionId | null;
+  activeActionTarget: string | null;
   assistantDraft: string;
   busy: boolean;
+  canRegenerate: boolean;
   chapterId: string;
   mode: ChatMode;
   regenerating: boolean;
@@ -2063,6 +2333,9 @@ function ChapterChatPanel({
   const regenerateLabel = mode === "script"
     ? regenerating ? "重写中..." : hasDiscussion ? "带着讨论重写本章剧本卡" : "重写本章剧本卡"
     : regenerating ? "重读中..." : hasDiscussion ? "带着讨论重新理解" : "重新理解本章";
+  const sending = activeAction === "chapterChat" && activeActionTarget === chapterId;
+  const runningRegenerate = activeAction === (mode === "script" ? "regenerateScript" : "regenerateChapter")
+    && activeActionTarget === chapterId;
   return (
     <aside className="chapter-chat-panel" data-testid="chapter-chat-panel">
       <div className="artifact-header">
@@ -2079,8 +2352,10 @@ function ChapterChatPanel({
           <>
             <span>{chapterId} · 原文 {wordCount ?? 0} 字</span>
             <p>{summary}</p>
-            <button type="button" disabled={busy || regenerating} onClick={() => onRegenerate(chapterId)}>
-              {regenerateLabel}
+            <button className={runningRegenerate ? "is-loading" : ""} type="button" disabled={!canRegenerate || busy || regenerating} onClick={() => onRegenerate(chapterId)}>
+              <ActionLabel loading={runningRegenerate || regenerating} loadingText={mode === "script" ? "重写中..." : "重读中..."}>
+                {regenerateLabel}
+              </ActionLabel>
             </button>
           </>
         ) : (
@@ -2120,8 +2395,10 @@ function ChapterChatPanel({
           onChange={(event) => onChangeInput(event.target.value)}
           placeholder="指出你不满意的地方，例如：第二章周砚的动机读偏了..."
         />
-        <button type="button" disabled={busy || !input.trim()} onClick={onSend}>
-          发送
+        <button className={sending ? "is-loading" : ""} type="button" disabled={busy || !input.trim()} onClick={onSend}>
+          <ActionLabel loading={sending} loadingText="发送中...">
+            发送
+          </ActionLabel>
         </button>
       </div>
     </aside>
@@ -2170,6 +2447,8 @@ function SettingsDrawer({
   onClose,
   onRefresh,
   onTest,
+  refreshing,
+  testing,
 }: {
   busy: boolean;
   llmStatus: LlmStatus | null;
@@ -2177,6 +2456,8 @@ function SettingsDrawer({
   onClose: () => void;
   onRefresh: () => void;
   onTest: () => void;
+  refreshing: boolean;
+  testing: boolean;
 }) {
   return (
     <div className="settings-backdrop" role="presentation">
@@ -2205,11 +2486,15 @@ function SettingsDrawer({
             <strong>{llmStatus?.base_url_configured ? "已配置" : "默认 OpenAI"}</strong>
           </div>
           <div className="inline-actions">
-            <button type="button" disabled={busy} onClick={onRefresh}>
-              刷新状态
+            <button className={refreshing ? "is-loading" : ""} type="button" disabled={busy} onClick={onRefresh}>
+              <ActionLabel loading={refreshing} loadingText="刷新中...">
+                刷新状态
+              </ActionLabel>
             </button>
-            <button type="button" disabled={busy} onClick={onTest}>
-              测试连接
+            <button className={testing ? "is-loading" : ""} type="button" disabled={busy} onClick={onTest}>
+              <ActionLabel loading={testing} loadingText="测试中...">
+                测试连接
+              </ActionLabel>
             </button>
           </div>
           {llmTestResult ? (
@@ -2556,6 +2841,8 @@ function PlanCards({
 }
 
 function ArtifactPanelView({
+  activeAction,
+  activeActionTarget,
   activePanel,
   artifactGroups,
   busy,
@@ -2592,6 +2879,8 @@ function ArtifactPanelView({
   validationReport,
   yamlText,
 }: {
+  activeAction: ActionId | null;
+  activeActionTarget: string | null;
   activePanel: ArtifactPanel;
   artifactGroups: { title: string; items: string[] }[];
   busy: boolean;
@@ -2745,8 +3034,10 @@ function ArtifactPanelView({
                   <p>可以只重做跨章合成，也可以只改某一章后自动合成；如果某章内容和前后过渡都不对，就选择两者一起修。</p>
                 </div>
                 <div className="inline-actions">
-                  <button type="button" disabled={busy} onClick={handleConfirmFinalScript}>
-                    确认剧本
+                  <button className={activeAction === "confirmFinal" ? "is-loading" : ""} type="button" disabled={busy} onClick={handleConfirmFinalScript}>
+                    <ActionLabel loading={activeAction === "confirmFinal"} loadingText="确认中...">
+                      确认剧本
+                    </ActionLabel>
                   </button>
                   <button type="button" onClick={() => setFinalFeedbackOpen(true)}>
                     剧本不满意
@@ -2817,10 +3108,13 @@ function ArtifactPanelView({
                       placeholder="希望怎么改，例如：更忠实原文、减少解释、加强冲突。"
                     />
                     <div className="inline-actions">
-                      <button type="button" disabled={busy || !finalFeedbackText.trim() || finalFeedbackApplying} onClick={handleCreateFinalFeedback}>
-                        发送给 AI 诊断
+                      <button className={activeAction === "finalFeedback" ? "is-loading" : ""} type="button" disabled={busy || !finalFeedbackText.trim() || finalFeedbackApplying} onClick={handleCreateFinalFeedback}>
+                        <ActionLabel loading={activeAction === "finalFeedback"} loadingText="诊断中...">
+                          发送给 AI 诊断
+                        </ActionLabel>
                       </button>
                       <button
+                        className={activeAction === "applyFinalFeedback" ? "is-loading" : ""}
                         type="button"
                         disabled={
                           busy
@@ -2834,9 +3128,8 @@ function ArtifactPanelView({
                         }
                         onClick={handleApplyFinalFeedback}
                       >
-                        {finalFeedbackApplying
-                          ? "正在回退处理..."
-                          : finalFeedbackResult
+                        <ActionLabel loading={activeAction === "applyFinalFeedback" || finalFeedbackApplying} loadingText="返修中...">
+                          {finalFeedbackResult
                             ? finalFeedbackResult.feedback.target_type === "continuity"
                               ? "带着反馈重新合成"
                               : finalFeedbackResult.feedback.target_type === "chapter_and_continuity"
@@ -2847,6 +3140,7 @@ function ArtifactPanelView({
                               : finalFeedbackCategory === "chapter_and_continuity"
                                 ? "AI 定位后自动重写并合成"
                                 : "AI 定位后自动重写"}
+                        </ActionLabel>
                       </button>
                     </div>
                     {finalFeedbackResult ? (
@@ -2883,8 +3177,10 @@ function ArtifactPanelView({
               </div>
               <YamlEditor value={yamlText} schema={schema} onChange={setYamlText} />
               <div className="inline-actions">
-                <button type="button" disabled={busy || !canValidate} onClick={handleValidateYaml}>
-                  重新校验 YAML
+                <button className={activeAction === "validateYaml" ? "is-loading" : ""} type="button" disabled={busy || !canValidate} onClick={handleValidateYaml}>
+                  <ActionLabel loading={activeAction === "validateYaml"} loadingText="校验中...">
+                    重新校验 YAML
+                  </ActionLabel>
                 </button>
                 <button type="button" disabled={!yamlText.trim()} onClick={handleDownloadEditedYaml}>
                   下载当前 YAML

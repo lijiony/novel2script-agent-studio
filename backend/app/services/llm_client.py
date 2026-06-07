@@ -1,9 +1,13 @@
 import json
+from time import sleep
 from typing import Any
 
 from openai import OpenAI
 
 from app.core.config import Settings
+
+
+LLM_MAX_ATTEMPTS = 3
 
 
 class LlmClient:
@@ -54,40 +58,56 @@ class LlmClient:
             raise RuntimeError("Mock LLM does not generate remote JSON.")
         if self.client is None:
             raise RuntimeError("LLM client is not configured.")
-        response = self.client.chat.completions.create(
-            model=self.settings.openai_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(user_payload, ensure_ascii=False),
-                },
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-        )
-        content = response.choices[0].message.content
-        if not content:
-            raise RuntimeError("LLM returned empty content.")
-        return json.loads(content)
+        last_error: Exception | None = None
+        for attempt in range(LLM_MAX_ATTEMPTS):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.settings.openai_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {
+                            "role": "user",
+                            "content": json.dumps(user_payload, ensure_ascii=False),
+                        },
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.3,
+                )
+                content = response.choices[0].message.content
+                if not content or not content.strip():
+                    raise RuntimeError("模型这次没有返回内容。")
+                return json.loads(content)
+            except Exception as exc:  # pragma: no cover - network/provider dependent
+                last_error = exc
+                if attempt < LLM_MAX_ATTEMPTS - 1:
+                    sleep(0.4 * (attempt + 1))
+        raise RuntimeError(f"模型连续请求失败，请稍后重试。原始错误：{last_error}")
 
     def generate_text(self, system_prompt: str, user_payload: dict[str, Any]) -> str:
         if self.mock:
             raise RuntimeError("Mock LLM does not generate remote text.")
         if self.client is None:
             raise RuntimeError("LLM client is not configured.")
-        response = self.client.chat.completions.create(
-            model=self.settings.openai_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(user_payload, ensure_ascii=False),
-                },
-            ],
-            temperature=0.4,
-        )
-        content = response.choices[0].message.content
-        if not content:
-            raise RuntimeError("LLM returned empty content.")
-        return content.strip()
+        last_error: Exception | None = None
+        for attempt in range(LLM_MAX_ATTEMPTS):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.settings.openai_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {
+                            "role": "user",
+                            "content": json.dumps(user_payload, ensure_ascii=False),
+                        },
+                    ],
+                    temperature=0.4,
+                )
+                content = response.choices[0].message.content
+                if not content or not content.strip():
+                    raise RuntimeError("模型这次没有返回内容。")
+                return content.strip()
+            except Exception as exc:  # pragma: no cover - network/provider dependent
+                last_error = exc
+                if attempt < LLM_MAX_ATTEMPTS - 1:
+                    sleep(0.4 * (attempt + 1))
+        raise RuntimeError(f"模型连续请求失败，请稍后重试。原始错误：{last_error}")

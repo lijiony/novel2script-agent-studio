@@ -2724,6 +2724,142 @@ select {
   font-weight: 800;
 }
 
+.service-pill {
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fffdf8;
+  padding: 5px 11px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.service-pill.online {
+  color: var(--ok);
+}
+
+.service-pill.offline {
+  border-color: #efc4c4;
+  background: #fff7f5;
+  color: var(--error);
+}
+
+.action-banner {
+  margin-top: 12px;
+  border: 1px solid #bedbd4;
+  border-radius: 14px;
+  background: #eef8f5;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--accent-dark);
+}
+
+.action-banner div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.action-banner strong,
+.action-banner small {
+  overflow-wrap: anywhere;
+}
+
+.action-banner small {
+  color: var(--muted);
+}
+
+.action-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.mini-spinner {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  animation: spin 760ms linear infinite;
+}
+
+button.is-loading {
+  pointer-events: none;
+}
+
+.toast-viewport {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+  width: min(380px, calc(100vw - 36px));
+  display: grid;
+  gap: 10px;
+}
+
+.toast {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fffdf8;
+  box-shadow: var(--shadow-panel);
+  padding: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.toast strong {
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.toast p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.toast button {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.toast-success {
+  border-color: #b8dec9;
+}
+
+.toast-success strong {
+  color: var(--ok);
+}
+
+.toast-error {
+  border-color: #efc4c4;
+}
+
+.toast-error strong {
+  color: var(--error);
+}
+
+.toast-info {
+  border-color: #c7d7db;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .header-summary {
   margin-top: 12px;
 }
