@@ -235,7 +235,7 @@ export default function Home() {
   const totalScriptScenes = chapterScriptReviews.reduce((sum, item) => sum + (item.script_card?.scenes.length ?? 0), 0);
   const activeChatChapter = chapterReviews.find((item) => item.review.chapter_id === chatChapterId) ?? null;
   const activeScriptChatChapter = chapterScriptReviews.find((item) => item.review.chapter_id === chatChapterId) ?? null;
-  const artifactPanelOpen = Boolean(activeArtifactPanel);
+  const contextPanelOpen = Boolean(chatChapterId || activeArtifactPanel);
 
   useEffect(() => {
     getScriptSchema()
@@ -1218,7 +1218,10 @@ export default function Home() {
   }
 
   return (
-    <div className={artifactPanelOpen ? "workspace workspace-with-artifact" : "workspace workspace-compact"}>
+    <div
+      className={contextPanelOpen ? "workspace workspace-with-artifact" : "workspace workspace-compact"}
+      data-testid="workbench-shell"
+    >
       <aside className="sidebar">
         <div className="sidebar-brand">
           <strong>Novel2Script</strong>
@@ -1231,6 +1234,7 @@ export default function Home() {
         <button className="settings-button" type="button" onClick={() => setSettingsOpen(true)}>
           模型设置
         </button>
+        <div className="sidebar-section-title">工作流</div>
         <nav className="step-nav" aria-label="流程步骤">
           {stepLabels.map((label, index) => (
             <div className={index <= activeStepIndex(phase) ? "step-item active" : "step-item"} key={label}>
@@ -1240,6 +1244,7 @@ export default function Home() {
           ))}
         </nav>
         <TaskList activeRunId={run?.run_id ?? null} onSelect={loadRunTask} tasks={tasks} />
+        <div className="sidebar-section-title">改编档案</div>
         <div className="sidebar-actions">
           <button type="button" disabled={!chapterCards.length} onClick={() => openArtifactPanel("chapterCards")}>
             章节理解卡
@@ -1281,8 +1286,13 @@ export default function Home() {
 
       <main className="chat-shell">
         <section className="chat-header">
-          <p>AI 剧本副编剧</p>
-          <h1>把小说改成可表演、可追踪、可继续打磨的剧本初稿</h1>
+          <div className="chat-title-row">
+            <div>
+              <p>AI 剧本副编剧</p>
+              <h1>把小说改成可表演、可追踪、可继续打磨的剧本初稿</h1>
+            </div>
+            <span className="chat-status-chip">{phaseLabel(phase)}</span>
+          </div>
           <div className="header-summary">
             <span>面向网文作者</span>
             <span>3 章以上小说输入</span>

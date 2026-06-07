@@ -114,25 +114,51 @@ export default function LandingPage() {
           </div>
         </nav>
 
-        <div className="hero-copy">
-          <span className="hero-kicker">AI 改编副编剧工作台</span>
-          <h1>把长篇小说改成可继续打磨的剧本初稿</h1>
-          <p>
-            粘贴 3 章以上小说，AI 会先理解剧情、人物和线索，再让作者确认方向，
-            逐章生成剧本卡，最终合成可审计、可修改的 YAML 剧本初稿。
-          </p>
-          <div className="hero-actions">
-            <Link className="primary-link" href="/workbench">
-              开始改编
-            </Link>
-            <Link className="secondary-link" href="#journey">
-              查看改编旅程
-            </Link>
+        <div className="hero-stage">
+          <div className="hero-copy">
+            <span className="hero-kicker">AI 改编副编剧工作台</span>
+            <h1>把长篇小说改成可继续打磨的剧本初稿</h1>
+            <p>
+              粘贴 3 章以上小说，AI 会先理解剧情、人物和线索，再让作者确认方向，
+              逐章生成剧本卡，最终合成可审计、可修改的 YAML 剧本初稿。
+            </p>
+            <div className="hero-actions">
+              <Link className="primary-link" href="/workbench">
+                开始改编
+              </Link>
+              <Link className="secondary-link" href="#journey">
+                查看改编旅程
+              </Link>
+            </div>
+            <div className="hero-facts" aria-label="核心能力">
+              {heroSteps.map((step) => (
+                <span key={step}>{step}</span>
+              ))}
+            </div>
           </div>
-          <div className="hero-facts" aria-label="核心能力">
-            {heroSteps.map((step) => (
-              <span key={step}>{step}</span>
-            ))}
+
+          <div className="hero-workbench-card" aria-label="工作台预览">
+            <div className="preview-sidebar">
+              <strong>当前改编</strong>
+              <span>章节确认</span>
+              <span>作者方向</span>
+              <span>YAML 打磨</span>
+            </div>
+            <div className="preview-main">
+              <span>AI 正在说明它读到了什么</span>
+              <strong>第 1 章理解卡</strong>
+              <p>关键事件、人物关系、线索和改编机会会先摊开给作者确认。</p>
+              <div>
+                <em>通过</em>
+                <em>讨论修改</em>
+                <em>重新理解</em>
+              </div>
+            </div>
+            <div className="preview-panel">
+              <span>上下文</span>
+              <strong>YAML / 报告</strong>
+              <p>只在需要时打开，不打断主创作流。</p>
+            </div>
           </div>
         </div>
 
