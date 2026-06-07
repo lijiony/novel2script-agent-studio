@@ -137,29 +137,6 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="hero-workbench-card" aria-label="工作台预览">
-            <div className="preview-sidebar">
-              <strong>当前改编</strong>
-              <span>章节确认</span>
-              <span>作者方向</span>
-              <span>YAML 打磨</span>
-            </div>
-            <div className="preview-main">
-              <span>AI 正在说明它读到了什么</span>
-              <strong>第 1 章理解卡</strong>
-              <p>关键事件、人物关系、线索和改编机会会先摊开给作者确认。</p>
-              <div>
-                <em>通过</em>
-                <em>讨论修改</em>
-                <em>重新理解</em>
-              </div>
-            </div>
-            <div className="preview-panel">
-              <span>上下文</span>
-              <strong>YAML / 报告</strong>
-              <p>只在需要时打开，不打断主创作流。</p>
-            </div>
-          </div>
         </div>
 
         <div className="hero-flow-preview" aria-label="流程预览">
