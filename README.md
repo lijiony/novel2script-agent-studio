@@ -210,15 +210,17 @@ Reader and planner intermediate outputs are also validated with Pydantic models 
 
 ## Original Work
 
-Original parts of this project:
+Except for the third-party dependencies listed below, the core product design and implementation are original, including:
 
 - Novel-to-script workflow design.
-- Pydantic screenplay schema.
-- Two-stage LangGraph adaptation co-writer workflow.
-- Run artifact storage design without a database.
+- Chapter understanding card review flow.
+- Story Bible and adaptation planning flow.
+- Per-chapter script card review and regeneration flow.
+- Continuity merge and final repair workflow.
+- Pydantic screenplay schema and traceability field design.
 - YAML export and validation flow.
-- Frontend editing and download workflow.
-- Sample text, validation report format, and README/demo materials.
+- Frontend author review, editing, validation, and download workflow.
+- Sample novel text, adaptation report format, and demo materials.
 
 Third-party libraries are listed in `backend/pyproject.toml` and `frontend/package.json`.
 

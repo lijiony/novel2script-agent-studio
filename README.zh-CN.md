@@ -217,13 +217,17 @@ validate_input
 
 ## 原创部分
 
+除下方列出的第三方依赖外，项目核心设计和实现均为原创，主要包括：
+
 - 小说转剧本产品流程设计。
-- Pydantic 剧本 Schema。
-- 两阶段 LangGraph 改编副编剧工作流。
-- 无数据库 run artifact 存储设计。
+- 章节理解卡审核流程。
+- Story Bible 和改编计划生成流程。
+- 逐章剧本卡审核与重写流程。
+- 连贯性合成和最终返修流程。
+- Pydantic 剧本 Schema 和来源追踪字段设计。
 - YAML 导出和校验流程。
-- 前端编辑、校验、下载和返修工作台。
-- 示例文本和样例报告格式。
+- 前端作者审核、编辑、校验、下载和返修工作台。
+- 示例小说文本、改编报告格式和 demo 材料。
 
 第三方依赖见 `backend/pyproject.toml` 和 `frontend/package.json`。
 
