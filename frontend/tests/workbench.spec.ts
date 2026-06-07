@@ -14,7 +14,7 @@ const sixChapterNovel = Array.from({ length: 6 }, (_, index) => {
 }).join("\n\n");
 
 test("reviews chapters before planning and keeps artifacts hidden until script generation", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/workbench");
 
   await expect(page.getByRole("heading", { name: /把小说改成/ })).toBeVisible();
   await expect(page.getByTestId("artifact-panel")).toHaveCount(0);
@@ -64,6 +64,7 @@ test("reviews chapters before planning and keeps artifacts hidden until script g
   await page.getByLabel("风格偏向").selectOption("psychological");
   await page.getByLabel("作者备注").fill("心理活动要转成可表演动作。");
   const scopeCard = page.locator(".generation-scope-card");
+  await scopeCard.getByRole("button", { name: "前 3 章" }).click();
   await expect(scopeCard.getByText("已选择第 1, 2, 3 章")).toBeVisible();
   await scopeCard.getByRole("button", { name: /第 2 章/ }).click();
   await scopeCard.getByRole("button", { name: /第 5 章/ }).click();
