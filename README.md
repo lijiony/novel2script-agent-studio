@@ -1,10 +1,10 @@
 # Novel2Script Agent Studio
 
+Language: English | [简体中文](README.zh-CN.md)
+
 > Demo video: [Bilibili 72-hour walkthrough](https://b23.tv/8aTHmco)
 > Live preview: [Netlify project page](https://novel2script-agent-studio-lijiony.netlify.app/)
 > YAML Schema document: [docs/schema.md](docs/schema.md)
-
-Language: English | [简体中文](README.zh-CN.md)
 
 Novel2Script Agent Studio is a lightweight, stateless AI co-writer workbench that helps authors adapt 3+ chapters of novel text into a performable, editable, and traceable screenplay YAML draft. It first analyzes the novel and proposes an adaptation plan, then lets the author choose script format, style focus, adaptation scale, preserved content, forbidden changes, and notes before generation.
 
