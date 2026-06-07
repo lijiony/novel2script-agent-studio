@@ -12,8 +12,9 @@ Describe the main technical decisions, modules touched, and any tradeoffs.
 - [ ] Frontend build: `cd frontend && npm run build`
 - [ ] Frontend smoke test: `cd frontend && npx playwright test`
 
-## Submission Notes
+## Review Checklist
 
 - [ ] Main branch remains runnable after merge.
 - [ ] README or docs updated if behavior changed.
+- [ ] No secrets, `.env` files, local run artifacts, or build outputs are committed.
 - [ ] No database or persistent user data added.
